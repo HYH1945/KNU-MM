@@ -1,0 +1,120 @@
+[
+  {
+    "timestamp": "2026-01-21T02:27:00.910Z",
+    "text": "안녕하세요 오늘도 좋은 하루 보내세요 감사합니다",
+    "model": "whisper-base",
+    "language": "ko"
+  },
+  {
+    "timestamp": "2026-01-21T11:44:30.685886",
+    "text": "오늘 저녁은 월 먹어야 될지 고민 중입니다. 딱 또리 딱. 이거 바로 안 됐어.",
+    "analysis": {
+      "context": "개인이 월 食하기에 대해서 고민 중",
+      "urgency": "중간",
+      "urgency_reason": "음식 관련 결정 없이 한 달 지난 시점으로 부득이 신경을 쓴 상황",
+      "situation": "일상적인 질문",
+      "situation_type": "정보요청",
+      "emotional_state": "부정",
+      "action": "음식 관련 정보를 제공하여 사용자가 선택 decision",
+      "priority": "중간"
+    },
+    "model": "whisper-base",
+    "language": "ko"
+  },
+  {
+    "timestamp": "2026-01-21T11:46:10.929883",
+    "text": "이.. 아.. 여기? 하자, 이.. 하자, 이.. 몰라, 이.. 이.. 이.. 이.. 이.. 이.. 이.. 이.. 이.. 이.. 이..",
+    "analysis": {
+      "context": "사용자가 장소를 묻는 대화",
+      "urgency": "중간",
+      "urgency_reason": "사용자가 장소를 묻고 있으나 긴급하지는 않음",
+      "situation": "사용자는 특정 장소로 가기 위해 의견을 구하고 있습니다.",
+      "situation_type": "일상",
+      "emotional_state": "중립",
+      "action": "사용자와 상호작용하여 장소를 알려주는 것을 권장합니다.",
+      "priority": "중간"
+    },
+    "model": "whisper-base",
+    "language": "ko"
+  },
+  {
+    "timestamp": "2026-01-21T11:47:29.434733",
+    "text": "결안간 완성을 높은다.",
+    "analysis": {
+      "context": "사람이 결산간(기지탄)을 제작하는 과정에 대해 질문하고 있음",
+      "urgency": "중간",
+      "urgency_reason": "결산간은 보안 및 무장용어이므로 유의하여야 함",
+      "situation": "사람이 제작에 관한 질문을 하고 있음",
+      "situation_type": "정보요청",
+      "emotional_state": "중립",
+      "action": "답변으로 해당 과정에 대한 정보를 제공할 것",
+      "priority": "중간"
+    },
+    "model": "whisper-base",
+    "language": "ko"
+  },
+  {
+    "timestamp": "2026-01-21T11:48:10.313738",
+    "text": "공마뜩이 아아 참을 공마뜩 아아아 아아 아아 아 아아 이 밑에 턱 다 보니 좀",
+    "analysis": {
+      "context": "요청자는 '아아'와 같은 소음을 반복하며, 어려움이나 불편함을 나타내고 있습니다.",
+      "urgency": "중간",
+      "urgency_reason": "요청자가 불편함에 대한 신호로 인해 반응이 필요합니다.",
+      "situation": "상황은 요청자의 불편을 나타내는 것으로, 추가적인 정보 수집이 필요합니다.",
+      "situation_type": "일상",
+      "emotional_state": "부정",
+      "action": "요청자와의 대화를 통해 요청자의 원인과 해결책을 파악하고, 해당 문제를 해소하는 데 필요한 조치를 취합니다.",
+      "priority": "중간"
+    },
+    "model": "whisper-base",
+    "language": "ko"
+  },
+  {
+    "timestamp": "2026-01-21T11:49:08.206336",
+    "text": "살려주세요 살려주세요",
+    "analysis": {
+      "context": "요청에 대한 비상의 요구가 있음",
+      "urgency": "긴급",
+      "urgency_reason": "당사자가 긍정적인 감정으로 삶을 부탁하고 있음",
+      "situation": "사람이 생명위기에 처한 상황",
+      "situation_type": "비상",
+      "emotional_state": "긍정",
+      "action": "전화번호를 얻고 제대로 된 응답을 받기 위해 지역 소방서에 연락하세요.",
+      "priority": "최우선"
+    },
+    "model": "whisper-base",
+    "language": "ko"
+  },
+  {
+    "timestamp": "2026-01-21T11:49:50.253052",
+    "text": "물이야, 물이야, 신토 물이야, 살려주세요",
+    "analysis": {
+      "context": "사람은 강에서 빠졌다는 것을 의미하는 상황",
+      "urgency": "긴급",
+      "urgency_reason": "사람이 물에 빠졌기 때문",
+      "situation": "사람이 강에서 물에 빠져 위험에 처한 상황",
+      "situation_type": "긴급",
+      "emotional_state": "부정",
+      "action": "신속하게 사람을 구해주세요",
+      "priority": "높음"
+    },
+    "model": "whisper-base",
+    "language": "ko"
+  },
+  {
+    "timestamp": "2026-01-21T14:00:39.081304",
+    "text": "지금은 위급 상황입니다. 신고해주세요. 이러면 되나? 신고하는데요.",
+    "analysis": {
+      "context": "사용자가 현재 발생한 문제를 신고하려 하고 있음",
+      "urgency": "높음",
+      "urgency_reason": "사용자가 '지금은 위급 상황입니다.'라는 말로 중요한 문제를 나타내었습니다.",
+      "situation": "사용자에게 발생한 문제",
+      "situation_type": "긴급",
+      "emotional_state": "부정",
+      "action": "적절한 관리자나 담당자로 신고하는 것을 권장합니다.",
+      "priority": "높음"
+    },
+    "model": "whisper-base",
+    "language": "ko"
+  }
+]

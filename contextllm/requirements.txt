@@ -1,0 +1,11 @@
+# Python 의존성
+# pip install -r requirements.txt
+
+# 음성 인식
+openai-whisper>=20231106
+
+# HTTP 요청 (Ollama 통신)
+requests>=2.31.0
+
+# 파일 처리
+numpy>=1.24.0

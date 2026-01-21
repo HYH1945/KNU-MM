@@ -1,0 +1,68 @@
+# Python 가상환경
+.venv/
+venv/
+env/
+ENV/
+
+# Python 캐시
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Node.js
+node_modules/
+npm-debug.log
+yarn-error.log
+
+# VS Code
+.vscode/
+*.code-workspace
+
+# Mac
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# IDE
+.idea/
+*.swp
+*.swo
+*~
+
+# 임시 파일
+*.tmp
+*.temp
+temp/
+*.log
+
+# 녹음 파일 (개별 테스트용)
+recording.wav
+recordings/
+
+# 빌드 결과
+out/
+dist/
+
+# 환경 설정
+.env
+.env.local
+
+# 운영체제
+Thumbs.db

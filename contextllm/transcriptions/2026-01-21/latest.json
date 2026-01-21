@@ -1,0 +1,16 @@
+{
+  "timestamp": "2026-01-21T14:00:39.081304",
+  "text": "지금은 위급 상황입니다. 신고해주세요. 이러면 되나? 신고하는데요.",
+  "analysis": {
+    "context": "사용자가 현재 발생한 문제를 신고하려 하고 있음",
+    "urgency": "높음",
+    "urgency_reason": "사용자가 '지금은 위급 상황입니다.'라는 말로 중요한 문제를 나타내었습니다.",
+    "situation": "사용자에게 발생한 문제",
+    "situation_type": "긴급",
+    "emotional_state": "부정",
+    "action": "적절한 관리자나 담당자로 신고하는 것을 권장합니다.",
+    "priority": "높음"
+  },
+  "model": "whisper-base",
+  "language": "ko"
+}
