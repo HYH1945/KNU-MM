@@ -84,8 +84,11 @@ def main():
         return
 
     print("Controls: [W/A/S/D] Move, [Space] Stop, [Q] Quit")
+    print("YOLO detection: Every 3 frames (for better performance)")
 
     frame_count = 0
+    skip_frames = 3  # 3프레임마다 1번만 YOLO 추론 (성능 최적화)
+    last_results = None  # 마지막 추론 결과 저장
 
     try:
         while True:
@@ -97,11 +100,17 @@ def main():
             
             frame_count += 1
             
-            # YOLO 추론 수행 (conf=0.5는 확신도 50% 이상인 것만 표시)
-            results = model(frame, conf=0.5, verbose=False)
+            # N프레임마다만 YOLO 추론 수행 (성능 최적화)
+            if frame_count % skip_frames == 0:
+                # YOLO 추론 수행 (conf=0.5는 확신도 50% 이상인 것만 표시)
+                results = model(frame, conf=0.5, verbose=False)
+                last_results = results
             
-            # 결과가 그려진 프레임 가져오기
-            annotated_frame = results[0].plot()
+            # 마지막 추론 결과를 사용하여 프레임에 박스 그리기
+            if last_results is not None:
+                annotated_frame = last_results[0].plot()
+            else:
+                annotated_frame = frame  # 아직 추론 결과가 없으면 원본 프레임 표시
             
             # 박스가 그려진 프레임 표시
             cv2.imshow(window_name, annotated_frame)
