@@ -43,6 +43,14 @@ def initialize_system():
     time.sleep(3) # 정렬할 시간 부여
     status_text = "System Ready: Monitoring..."
 
+def get_sector_angle(raw_angle):
+    """
+    360도를 12개 구역(30도 단위)으로 나눔
+    0도 구역: 345도 ~ 15도 사이를 모두 0도로 처리
+    """
+    sector_angle = ((raw_angle + 15) // 30) * 30
+    return sector_angle % 360
+
 def control_ptz_absolute(pan, tilt=-15):
     """
     Hikvision 절대 좌표 제어 안전 버전
@@ -70,56 +78,51 @@ def control_ptz_absolute(pan, tilt=-15):
         print(f"PTZ 제어 실패: {e}")
 
 def mic_monitoring_thread():
-    global status_text
-    print(">>> 음성 감지 스레드 시작")
-    
-    # 디버깅용: 마지막으로 계산된 confidence 저장
-    last_conf = 0 
+    global status_text, last_camera_angle # last_camera_angle 전역 변수 필요
+    last_camera_angle = -1 
     
     while True:
         try:
-            # 사람음성감지 : speechdetected
-            # 유의미한소리감지 : voiceactivity
             if mic_tuning.read('SPEECHDETECTED') == 1:
                 raw_angle = mic_tuning.read('DOAANGLE')
                 gain = mic_tuning.read('AGCGAIN')
-                
                 angle_history.append(raw_angle)
                 
-                # 최소 5개만 쌓여도 분석 시작하도록 변경 (반응성 향상)
                 if len(angle_history) >= 5:
                     rad_angles = np.deg2rad(list(angle_history))
                     sin_mean = np.mean(np.sin(rad_angles))
                     cos_mean = np.mean(np.cos(rad_angles))
-                    
                     confidence = np.sqrt(sin_mean**2 + cos_mean**2)
-                    last_conf = confidence # 모니터링용
 
-                    # 1. 사각지대 판정: 신뢰도가 극단적으로 낮고 소리가 매우 클 때
+                    # 1. 사각지대 판정
                     if confidence < 0.4 and gain < 10.0:
                         status_text = f"!! ZENITH !! (Conf:{confidence:.2f})"
                         control_ptz_absolute(pan=None, tilt=-90)
                     
-                    # 2. 일반 방향 판정: 임계값을 0.6으로 낮춤
+                    # 2. 일반 방향 판정 (confidence: 신뢰도, 감지 음성 각도가 무작위할수록 값이 낮아짐)
                     elif confidence > 0.6:
+                        # 평균 각도 계산
                         smooth_angle = np.rad2deg(np.arctan2(sin_mean, cos_mean)) % 360
-                        status_text = f"Moving to {smooth_angle:.1f} (Conf:{confidence:.2f})"
-                        control_ptz_absolute(pan=smooth_angle, tilt=-15)
+                        target_sector = get_sector_angle(smooth_angle)
+                        
+                        # 다른 구역 각도 나왔을 때만 이동
+                        if target_sector != last_camera_angle:
+                            status_text = f"Moving to Sector {target_sector} (Original:{smooth_angle:.1f})"
+                            control_ptz_absolute(pan=target_sector, tilt=-15)
+                            last_camera_angle = target_sector
+                        else:
+                            status_text = f"Monitoring Sector {target_sector}"
                     
                     else:
-                        # 신뢰도가 애매한 구간 (0.4 ~ 0.6)
                         status_text = f"Low Confidence: {confidence:.2f}"
                 
-                # 디버깅 출력
-                print(f"Angle: {raw_angle:3d}, Gain: {gain:4.1f}, Conf: {last_conf:.2f}", end='\r')
-
-            time.sleep(0.05) # 샘플링 속도 상향
+            time.sleep(0.05)
         except Exception as e:
             print(f"\n마이크 스레드 에러: {e}")
 
 
 def start_system():
-    # 1. 카메라 영점 초기화
+    # 1. 카메라 영점세팅
     initialize_system()
 
     # 2. 마이크 감시 스레드 시작
@@ -135,7 +138,6 @@ def start_system():
             continue
 
         display_frame = cv2.resize(frame, (800, 600))
-        # 상태 텍스트 표시 (배경을 넣어 가독성 확보)
         cv2.rectangle(display_frame, (10, 10), (450, 60), (0, 0, 0), -1)
         cv2.putText(display_frame, status_text, (20, 45), 
                     cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
