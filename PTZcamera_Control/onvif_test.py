@@ -3,6 +3,7 @@ import threading
 import os
 from dotenv import load_dotenv
 from onvif import ONVIFCamera
+from ultralytics import YOLO
 
 
 load_dotenv()
@@ -67,10 +68,15 @@ class PTZCameraController: # PTZ Camera 제어 클래스
         self._execute_async(send_stop_command)
 
 def main():
+    # YOLO 모델 로드 (yolov8n.pt는 가장 가볍고 빠른 모델)
+    print("Loading YOLO model...")
+    model = YOLO('yolov8n.pt')
+    print("YOLO model loaded successfully!")
+    
     ptz_controller = PTZCameraController(CAMERA_IP, CAMERA_PORT, CAMERA_USER, CAMERA_PASSWORD)
 
     video_capture = cv2.VideoCapture(RTSP_URL)
-    window_name = "CCTV Monitoring System"
+    window_name = "CCTV Monitoring + YOLO Detection"
     cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
 
     if not video_capture.isOpened():
@@ -91,7 +97,14 @@ def main():
             
             frame_count += 1
             
-            cv2.imshow(window_name, frame)
+            # YOLO 추론 수행 (conf=0.5는 확신도 50% 이상인 것만 표시)
+            results = model(frame, conf=0.5, verbose=False)
+            
+            # 결과가 그려진 프레임 가져오기
+            annotated_frame = results[0].plot()
+            
+            # 박스가 그려진 프레임 표시
+            cv2.imshow(window_name, annotated_frame)
 
             key_code = cv2.waitKey(1) & 0xFF
             
