@@ -1,0 +1,16 @@
+{
+  "timestamp": "2026-01-22T12:12:54.640222",
+  "text": "łe 그 잣은 소 gallon 저희 자식들이 애매porter Même 쓰여",
+  "analysis": {
+    "context": "대화의 맥락: 가족 관리에 관련된 질문",
+    "urgency": "중간",
+    "urgency_reason": "자식들이 관심사로 갖춘 물건인데, 단위를 맞추는 것이 중요함",
+    "situation": "상황: 가족의 소비 물품 관리",
+    "situation_type": "일상",
+    "emotional_state": "중립",
+    "action": "권장 조치: 가족과 함께 이해하고 적절한 단위로 소비 물품 구매",
+    "priority": "중간"
+  },
+  "model": "whisper-base",
+  "language": "ko"
+}
