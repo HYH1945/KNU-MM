@@ -1,0 +1,114 @@
+[
+  {
+    "timestamp": "2026-01-22T12:00:09.097279",
+    "text": "진짜 일단 아무 생각 없이 대화를 해본다 왜냐하면 지금 어느 정도 실시간을 못먹을래 저한테는 지 안 한 번 벗어나면 안 한 번 먹으라고",
+    "analysis": {
+      "context": "사용자가 실시간 대화에 참여하기로 결정했다.",
+      "urgency": "중간",
+      "urgency_reason": "사용자는 실시간 대화를 할 수 없으니까.",
+      "situation": "사용자가 실시간 대화에 참여하기로 결정했습니다.",
+      "situation_type": "일상",
+      "emotional_state": "중립",
+      "action": "사용자와 문제없이 실시간 대화를 진행합니다.",
+      "priority": "중간"
+    },
+    "model": "whisper-base",
+    "language": "ko"
+  },
+  {
+    "timestamp": "2026-01-22T12:00:48.910962",
+    "text": "그래서 이거는 좀 수정해야 될 것 같아요 여기가 어디서? 안 되나? 학교에 온 걸, 학교에를 좀...",
+    "analysis": {
+      "context": "사용자는 자신의 위치를 확인하고 있음",
+      "urgency": "중간",
+      "urgency_reason": "사용자가 자신이 현재 어디에 있는지 궁금해서 자신을 옮길 수 있는 상황임",
+      "situation": "사용자가 위치를 확인하고 있음",
+      "situation_type": "정보요청",
+      "emotional_state": "중립",
+      "action": "시스템은 사용자의 현재 위치를 알려줌",
+      "priority": "중간"
+    },
+    "model": "whisper-base",
+    "language": "ko"
+  },
+  {
+    "timestamp": "2026-01-22T12:11:43.074635",
+    "text": "안녕하세요. 좋은 하루 보내세요. 안녕하세요. 안녕하세요. 안녕하세요.",
+    "analysis": {
+      "context": "인사 대화",
+      "urgency": "낮음",
+      "urgency_reason": "입력된 문장들은 일상적인 인사로 간주됨",
+      "situation": "인사 대화",
+      "situation_type": "일상",
+      "emotional_state": "긍정",
+      "action": "없음",
+      "priority": "낮음"
+    },
+    "model": "whisper-base",
+    "language": "ko"
+  },
+  {
+    "timestamp": "2026-01-22T12:12:02.872638",
+    "text": "안녕하세요 안녕하세요 안녕하세요 안녕하세요",
+    "analysis": {
+      "context": "응답자가 여러번 '안녕하세요'를 반복하여 대화의 시작을 나타내고 있습니다.",
+      "urgency": "낮음",
+      "urgency_reason": "사용자는 정보 교환 목적으로 '안녕하세요'를 반복했기 때문에 위급도는 낮습니다.",
+      "situation": "사용자가 응답자와 대화를 시작하고 있음",
+      "situation_type": "일상",
+      "emotional_state": "중립",
+      "action": "따뜻하게 '안녕하세요'로 사용자의 대화를 받아들이고 관계를 구축할 수 있습니다.",
+      "priority": "낮음"
+    },
+    "model": "whisper-base",
+    "language": "ko"
+  },
+  {
+    "timestamp": "2026-01-22T12:12:18.526228",
+    "text": "안녕하세요. 안녕하세요. 안녕하세요. 안녕하세요.",
+    "analysis": {
+      "context": "대화의 맥락은 인사를 반복해서 한다.",
+      "urgency": "낮음",
+      "urgency_reason": "이는 일상적인 인사로 인해 위급하지 않다.",
+      "situation": "대화자는 친절하게 인사를 반복하고 있다.",
+      "situation_type": "정보요청이 없으므로 '일상'",
+      "emotional_state": "긍정",
+      "action": "없음",
+      "priority": "낮음"
+    },
+    "model": "whisper-base",
+    "language": "ko"
+  },
+  {
+    "timestamp": "2026-01-22T12:12:34.433075",
+    "text": "chocol<|ms|>mother",
+    "analysis": {
+      "context": "사람이 부모님을 칭하는 말씀",
+      "urgency": "낮음",
+      "urgency_reason": "이름 부르는 행위로 일반적인 대화에서 끌어들여진 것",
+      "situation": "사람과 부모님을 소통하고 있음",
+      "situation_type": "일상",
+      "emotional_state": "중립",
+      "action": "none",
+      "priority": "낮음"
+    },
+    "model": "whisper-base",
+    "language": "ko"
+  },
+  {
+    "timestamp": "2026-01-22T12:12:54.640222",
+    "text": "łe 그 잣은 소 gallon 저희 자식들이 애매porter Même 쓰여",
+    "analysis": {
+      "context": "대화의 맥락: 가족 관리에 관련된 질문",
+      "urgency": "중간",
+      "urgency_reason": "자식들이 관심사로 갖춘 물건인데, 단위를 맞추는 것이 중요함",
+      "situation": "상황: 가족의 소비 물품 관리",
+      "situation_type": "일상",
+      "emotional_state": "중립",
+      "action": "권장 조치: 가족과 함께 이해하고 적절한 단위로 소비 물품 구매",
+      "priority": "중간"
+    },
+    "model": "whisper-base",
+    "language": "ko"
+  }
+]
