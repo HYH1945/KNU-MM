@@ -19,6 +19,14 @@ from datetime import datetime
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor
 
+# OpenAI 설정 (ChatGPT 사용을 위해 추가)
+try:
+    from openai import OpenAI
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass
+
 # 설정 (현재 폴더 기준 상대 경로)
 VENV_PYTHON = "./.venv/bin/python3"
 WHISPER_SCRIPT = "./whisper_service.py"
@@ -137,7 +145,7 @@ class VoiceAnalyzer:
     
     def analyze_with_llm(self, text, system_prompt=None):
         """
-        LLM으로 텍스트 컨텍스트 분석 (Ollama Mistral 사용)
+        ChatGPT를 사용한 텍스트 컨텍스트 분석
         
         사용자 요구사항:
         1. context (맥락) 확인
@@ -149,74 +157,84 @@ class VoiceAnalyzer:
             system_prompt: 시스템 프롬프트 (None이면 기본값 사용)
         
         Returns:
-            LLM 분석 결과 (딕셔너리)
+            ChatGPT 분석 결과 (딕셔너리)
         """
         if system_prompt is None:
             system_prompt = """당신은 음성 입력을 분석하는 상황 분석 AI입니다.
+
+⚠️ 특히 다음의 긴급 키워드에 주의하세요:
+- "살려줘", "도와줘", "긴급", "119", "경찰", "신고", "침입", "도움", "위험", "피해", "사고", "화재", "폭발", "공격"
+- 목소리에서 극도의 공포, 비명, 고통, 긴박함이 감지되면 CRITICAL로 분류
 
 다음을 JSON으로만 반환하세요 (다른 텍스트 없이):
 {
   "context": "대화의 맥락을 간단히 설명",
   "urgency": "위급도 (낮음/중간/높음/긴급 중 하나)",
-  "urgency_reason": "왜 그 위급도인지 간단히",
-  "situation": "상황을 2-3줄로 분석",
-  "situation_type": "상황 유형 (업무/긴급/일상/정보요청 등)",
-  "emotional_state": "감정 상태 (긍정/중립/부정)",
+  "urgency_reason": "왜 그 위급도인지 간단히 설명",
+  "situation": "상황을 2-3줄로 상세히 분석",
+  "situation_type": "상황 유형 (업무/긴급/의료응급/보안/일상/정보요청/불만/기타 등)",
+  "emotional_state": "감정 상태 (긍정/중립/부정/공포/절박/분노 등)",
   "action": "권장 즉시 조치",
-  "priority": "우선순위 (낮음/중간/높음)"
-}"""
+  "is_emergency": true 또는 false,
+  "emergency_reason": "긴급 판정 이유 (긴급이 아니면 null)",
+  "priority": "우선순위 (CRITICAL/HIGH/MEDIUM/LOW 중 하나)"
+}
+
+📌 긴급(CRITICAL) 판정 기준:
+- 신체 위협: "살려줘", "도와줘", "죽일", "총", "칼", "폭행" 등
+- 재난: "화재", "폭발", "붕괴", "침수", "지진" 등
+- 범죄: "도둑", "침입", "강도", "성범죄", "테러" 등
+- 의료 응급: "심장", "질식", "독극물", "의식불명", "심한 출혈" 등
+- 기타 극도의 공포/절박함이 감지되는 경우"""
         
         try:
-            import requests
+            from openai import OpenAI
+            from dotenv import load_dotenv
             
-            print(f"🤖 LLM(Mistral) 상황 분석 중...")
+            # .env 파일에서 API 키 로드
+            load_dotenv()
+            api_key = os.getenv('OPENAI_API_KEY')
             
-            # Ollama 요청
-            response = requests.post(
-                'http://localhost:11434/api/generate',
-                json={
-                    'model': 'mistral',
-                    'prompt': f"{system_prompt}\n\n음성 입력: {text}",
-                    'stream': False,
-                    'temperature': 0.3  # 분석은 낮은 온도 (일관성)
-                },
+            if not api_key:
+                print("❌ OPENAI_API_KEY가 .env에 설정되지 않았습니다")
+                return {'error': 'OPENAI_API_KEY 미설정'}
+            
+            print(f"🤖 ChatGPT 상황 분석 중...")
+            
+            # ChatGPT 요청
+            client = OpenAI(api_key=api_key)
+            response = client.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": f"음성 입력: {text}"}
+                ],
+                temperature=0.3,  # 분석은 낮은 온도 (일관성)
                 timeout=60
             )
             
-            if response.status_code == 200:
-                result = response.json()
-                response_text = result.get('response', '').strip()
-                print(f"✅ LLM 분석 완료")
-                
-                # JSON 파싱 시도
-                try:
-                    # 응답에서 JSON 부분만 추출
-                    import re
-                    json_match = re.search(r'\{.*\}', response_text, re.DOTALL)
-                    if json_match:
-                        analysis = json.loads(json_match.group())
-                    else:
-                        analysis = json.loads(response_text)
-                    return analysis
-                except json.JSONDecodeError:
-                    # JSON 파싱 실패 시 원본 반환
-                    return {'raw': response_text, 'raw_analysis': response_text}
-            else:
-                print(f"❌ LLM 오류: {response.status_code}")
-                print(f"   응답: {response.text[:200]}")
-                return {'error': f'LLM 서버 오류 ({response.status_code})'}
+            response_text = response.choices[0].message.content.strip()
+            print(f"✅ ChatGPT 분석 완료")
+            
+            # JSON 파싱 시도
+            try:
+                # 응답에서 JSON 부분만 추출
+                json_match = re.search(r'\{.*\}', response_text, re.DOTALL)
+                if json_match:
+                    analysis = json.loads(json_match.group())
+                else:
+                    analysis = json.loads(response_text)
+                return analysis
+            except json.JSONDecodeError:
+                # JSON 파싱 실패 시 원본 반환
+                return {'raw': response_text, 'raw_analysis': response_text}
         
-        except requests.exceptions.ConnectionError:
-            print("❌ LLM 서버에 연결할 수 없음 (localhost:11434)")
-            print("   이미 실행 중이면: ollama serve가 background에서 실행 중")
-            print("   또는 새 터미널에서: ollama serve")
-            return {'error': 'LLM 서버 미연결', 'suggestion': 'ollama serve 확인'}
-        except ImportError:
-            print("❌ requests 라이브러리가 필요합니다")
-            print("   설치: pip install requests")
-            return {'error': 'requests 라이브러리 필요'}
+        except ImportError as e:
+            print(f"❌ 필요한 라이브러리가 없습니다: {e}")
+            print("   설치: pip install openai python-dotenv")
+            return {'error': f'라이브러리 필요: {e}'}
         except Exception as e:
-            print(f"❌ LLM 분석 오류: {e}")
+            print(f"❌ ChatGPT 분석 오류: {e}")
             return {'error': str(e)}
     
     def transcribe_and_analyze(self, duration=10, system_prompt=None):

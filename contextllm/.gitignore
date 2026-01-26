@@ -56,6 +56,10 @@ temp/
 recording.wav
 recordings/
 
+# 로그 파일 (session logs)
+data/logs/
+transcriptions/
+
 # 빌드 결과
 out/
 dist/
