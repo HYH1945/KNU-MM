@@ -4,15 +4,24 @@
 # 음성 인식 - OpenAI Whisper
 openai-whisper==20250625
 
+# 🌟 실시간 음성 인식 - SpeechRecognition (무료 버전)
+SpeechRecognition==3.14.5
+pyaudio==0.2.14
+
 # 🌟 실시간 스트리밍 - Google Cloud Speech-to-Text (선택사항)
 # google-cloud-speech==2.21.0
-# pyaudio==0.2.13
 
-# HTTP 요청 - Ollama 및 외부 API 통신
+# HTTP 요청 - 외부 API 통신
 requests==2.32.5
 
 # REST API 서버
 flask==3.0.0
+
+# OpenAI API 클라이언트 (ChatGPT 분석용)
+openai>=1.0.0
+
+# 환경 변수 관리
+python-dotenv>=1.0.0
 
 # 수치 연산 라이브러리
 numpy==2.2.6
