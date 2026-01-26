@@ -1,6 +1,8 @@
 import cv2
 import threading
 import os
+import time
+import torch
 from dotenv import load_dotenv
 from onvif import ONVIFCamera
 from ultralytics import YOLO
@@ -69,9 +71,17 @@ class PTZCameraController: # PTZ Camera 제어 클래스
 
 def main():
     # YOLO 모델 로드 (yolov8n.pt는 가장 가볍고 빠른 모델)
+    if torch.backends.mps.is_available():
+        device = "mps"
+    elif torch.cuda.is_available():
+        device = "cuda"
+    else:
+        device = "cpu"
+
     print("Loading YOLO model...")
     model = YOLO('yolov8n.pt')
     print("YOLO model loaded successfully!")
+    print(f"YOLO device: {device}")
     
     ptz_controller = PTZCameraController(CAMERA_IP, CAMERA_PORT, CAMERA_USER, CAMERA_PASSWORD)
 
@@ -89,6 +99,9 @@ def main():
     frame_count = 0
     skip_frames = 3  # 3프레임마다 1번만 YOLO 추론 (성능 최적화)
     last_results = None  # 마지막 추론 결과 저장
+    fps = 0.0
+    frames_since_last = 0
+    last_fps_time = time.perf_counter()
 
     try:
         while True:
@@ -99,11 +112,20 @@ def main():
                 break
             
             frame_count += 1
+            frames_since_last += 1
+            fps_updated = False
+            now = time.perf_counter()
+            elapsed = now - last_fps_time
+            if elapsed >= 1.0:
+                fps = frames_since_last / elapsed
+                frames_since_last = 0
+                last_fps_time = now
+                fps_updated = True
             
             # N프레임마다만 YOLO 추론 수행 (성능 최적화)
             if frame_count % skip_frames == 0:
                 # YOLO 추론 수행 (conf=0.5는 확신도 50% 이상인 것만 표시)
-                results = model(frame, conf=0.5, verbose=False)
+                results = model(frame, conf=0.5, device=device, verbose=False)
                 last_results = results
             
             # 마지막 추론 결과를 사용하여 프레임에 박스 그리기
@@ -111,6 +133,19 @@ def main():
                 annotated_frame = last_results[0].plot()
             else:
                 annotated_frame = frame  # 아직 추론 결과가 없으면 원본 프레임 표시
+
+            cv2.putText(
+                annotated_frame,
+                f"FPS: {fps:.1f}",
+                (10, 30),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.9,
+                (0, 255, 0),
+                2,
+                cv2.LINE_AA,
+            )
+            if fps_updated:
+                print(f"FPS: {fps:.1f}")
             
             # 박스가 그려진 프레임 표시
             cv2.imshow(window_name, annotated_frame)
