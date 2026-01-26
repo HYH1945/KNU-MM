@@ -26,6 +26,9 @@ python-dotenv>=1.0.0
 # 수치 연산 라이브러리
 numpy==2.2.6
 
+# 🎥 컴퓨터 비전 - OpenCV (카메라 모니터링용)
+opencv-python>=4.8.0
+
 # 토크나이저 - LLM 토큰 계산
 tiktoken==0.12.0
 
