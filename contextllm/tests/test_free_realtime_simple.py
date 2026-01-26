@@ -23,20 +23,10 @@ env_path = Path(__file__).parent.parent / 'config' / '.env'
 load_dotenv(env_path)
 
 import speech_recognition as sr
+from core.alert_manager import get_alert_manager
 
-# 긴급 알림 사운드 재생 (macOS/Linux)
-def play_emergency_alert():
-    """긴급 상황일 때 alert 음성 재생"""
-    try:
-        import subprocess
-        # macOS에서 system beep 재생
-        for i in range(3):
-            os.system('afplay /System/Library/Sounds/Alarm.aiff 2>/dev/null &')
-            if i < 2:
-                import time
-                time.sleep(0.2)
-    except Exception as e:
-        print(f"   ⚠️ 알림음 재생 실패: {e}")
+# 글로벌 alert manager 초기화
+alert_manager = get_alert_manager()
 
 # 로깅 디렉토리 생성
 LOG_DIR = Path(__file__).parent.parent / 'data' / 'logs'
@@ -153,18 +143,14 @@ while True:
         priority = analysis.get('priority', 'LOW')
         is_emergency = analysis.get('is_emergency', False)
         
-        # 🚨 긴급 상황 감지 및 알림
+        # 🚨 긴급 상황 감지 및 알림 (alert_manager 사용)
         if is_emergency or priority == 'CRITICAL':
-            print("\n" + "🚨" * 35)
-            print("🚨🚨🚨 ⚠️  **긴급 상황 감지됨!** ⚠️  🚨🚨🚨")
-            print("🚨" * 35 + "\n")
-            
-            # 긴급 알림음 재생
-            play_emergency_alert()
-            
-            emergency_reason = analysis.get('emergency_reason', '알 수 없는 긴급 상황')
-            print(f"   🔴 긴급 사유: {emergency_reason}")
-            print(f"   📞 즉시 대응 필요!\n")
+            alert_manager.trigger_alert({
+                'is_emergency': is_emergency,
+                'emergency_reason': analysis.get('emergency_reason', '알 수 없는 긴급 상황'),
+                'priority': priority,
+                'situation_type': analysis.get('situation_type', '미분류')
+            })
         
         # 상황 설명
         situation_text = analysis.get('situation', '미분류')
