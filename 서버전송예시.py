@@ -3,7 +3,8 @@ import requests
 # 1. 서버 주소 
 SERVER_URL = "https://invocative-guttate-tammy.ngrok-free.dev/publish"
 
-# 서버 전송 함수 예씨시
+# 서버 전송 함수 예시
+# 대충 서버에 날린 정보 그대로 저장됩니다 (카메라 이동시 카메라 각도값이나 객체 좌표값 같은 로그 찍을만한 거 보내면 될듯
 def send_angle(angle, source_name="예시) YOLO 등"):
     payload = {
         "source": source_name,
@@ -27,4 +28,5 @@ def send_angle(angle, source_name="예시) YOLO 등"):
 # --- 사용 예시 ---
 # 180도 방향에서 객체 detection시 
 send_angle(180.0, "YOLO_TEAM")
+
 
