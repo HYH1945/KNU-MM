@@ -1,6 +1,6 @@
 # 🔗 모듈 통합 가이드
 
-Context LLM을 다른 모듈(YOLO 등)과 통합할 때 참고하세요.
+Context LLM을 다른 모듈(YOLO 등)과 통합할 때 참고해볼 자료 <<
 
 ---
 
@@ -102,7 +102,7 @@ class YOLOModule(BaseAnalysisModule):
 
 ---
 
-### 2️⃣ 이벤트 기반 (Pub/Sub)
+### 2️⃣ 이벤트 기반 (Pub/Sub) << 쉬운건 이거 아닐까? >>
 
 모듈 간 느슨한 결합:
 
@@ -281,7 +281,7 @@ main_system/
 │       └── alert:
 │
 ├── modules/
-│   ├── context_llm/         # 👈 현재 프로젝트 (서브모듈로)
+│   ├── context_llm/         # LLM 모듈
 │   │   ├── src/
 │   │   │   └── core/
 │   │   ├── config/
@@ -374,7 +374,7 @@ if __name__ == "__main__":
 
 ## 📝 참고
 
-현재 Context LLM 모듈은 이미 잘 분리되어 있어서, **래퍼 클래스만 만들면** 바로 통합 가능합니다.
+현재 Context LLM 모듈은 이미 잘 분리되어 있어서, **래퍼 클래스만 만들면** 바로 가능.
 
 ```python
 # wrappers/context_llm_wrapper.py (최소 구현)
