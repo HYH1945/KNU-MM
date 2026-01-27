@@ -62,3 +62,6 @@ networkx==3.4.2
 sympy==1.14.0
 typing-extensions==4.15.0
 urllib3==2.6.3
+
+# 설정 파일 파싱
+PyYAML>=6.0

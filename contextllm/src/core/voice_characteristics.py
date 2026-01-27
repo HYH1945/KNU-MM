@@ -26,6 +26,15 @@ try:
 except ImportError:
     SCIPY_AVAILABLE = False
 
+# 설정 관리자 임포트
+try:
+    from core.config_manager import get_config
+    CONFIG_AVAILABLE = True
+except ImportError:
+    CONFIG_AVAILABLE = False
+    def get_config(*keys, default=None):
+        return default
+
 
 class VoiceCharacteristicsAnalyzer:
     """음성 특성 분석기 - 응급 상황 신뢰도 판정"""
@@ -35,18 +44,58 @@ class VoiceCharacteristicsAnalyzer:
         if not LIBROSA_AVAILABLE:
             print("⚠️  음성 특성 분석을 위해 librosa 설치가 필요합니다:")
             print("   pip install librosa")
+        
+        # config에서 임계값 로드
+        self._load_thresholds()
     
-    def extract_features(self, audio_file_path: str, sr: int = 16000) -> Dict[str, Any]:
+    def _load_thresholds(self):
+        """config에서 임계값 로드"""
+        va = 'voice_analysis'
+        
+        # 샘플링 레이트
+        self.sample_rate = get_config(va, 'sample_rate', default=16000)
+        
+        # 피치 임계값
+        self.pitch_high_threshold = get_config(va, 'pitch', 'high_threshold', default=250)
+        self.pitch_variability_threshold = get_config(va, 'pitch', 'variability_threshold', default=50)
+        
+        # 에너지 임계값
+        self.energy_normalization = get_config(va, 'energy', 'normalization_factor', default=0.5)
+        self.energy_volatility_threshold = get_config(va, 'energy', 'volatility_threshold', default=0.3)
+        
+        # 음성 속도 임계값
+        self.speech_rate_fast_threshold = get_config(va, 'speech_rate', 'fast_threshold', default=6)
+        
+        # 유성음 비율 임계값
+        self.voiced_ratio_low_threshold = get_config(va, 'voiced_ratio', 'low_threshold', default=0.3)
+        
+        # 지터/시머 임계값
+        self.jitter_threshold = get_config(va, 'jitter_shimmer', 'jitter_threshold', default=0.1)
+        self.shimmer_threshold = get_config(va, 'jitter_shimmer', 'shimmer_threshold', default=0.1)
+        
+        # 점수 계산 가중치
+        self.llm_weight = get_config(va, 'scoring', 'llm_weight', default=0.6)
+        self.voice_weight = get_config(va, 'scoring', 'voice_weight', default=0.4)
+        
+        # 우선순위 임계값
+        self.priority_critical = get_config(va, 'priority_thresholds', 'critical', default=0.85)
+        self.priority_high = get_config(va, 'priority_thresholds', 'high', default=0.65)
+        self.priority_medium = get_config(va, 'priority_thresholds', 'medium', default=0.40)
+    
+    def extract_features(self, audio_file_path: str, sr: int = None) -> Dict[str, Any]:
         """
         오디오 파일에서 특성 추출
         
         Args:
             audio_file_path: 오디오 파일 경로
-            sr: 샘플링 레이트
+            sr: 샘플링 레이트 (None이면 config에서 로드)
         
         Returns:
             음성 특성 딕셔너리
         """
+        if sr is None:
+            sr = self.sample_rate
+            
         if not LIBROSA_AVAILABLE:
             print("⚠️  librosa가 설치되지 않았습니다")
             return self._get_default_features()
@@ -245,43 +294,49 @@ class VoiceCharacteristicsAnalyzer:
         pitch_mean = audio_features.get('pitch', {}).get('mean', 0)
         pitch_std = audio_features.get('pitch', {}).get('std', 0)
         
-        # 일반적인 음성: 80-180 Hz (남성), 150-250 Hz (여성)
-        # 공포/긴장: 피치 평균이 높고 변동성도 큼
-        if pitch_mean > 250:
-            scores['high_pitch'] = min(1.0, (pitch_mean - 250) / 100)
+        # config에서 임계값 사용
+        pitch_threshold = self.pitch_high_threshold
+        variability_threshold = self.pitch_variability_threshold
+        
+        if pitch_mean > pitch_threshold:
+            scores['high_pitch'] = min(1.0, (pitch_mean - pitch_threshold) / 100)
         else:
             scores['high_pitch'] = 0.0
         
-        if pitch_std > 50:
+        if pitch_std > variability_threshold:
             scores['pitch_variability'] = min(1.0, pitch_std / 100)
         else:
-            scores['pitch_variability'] = pitch_std / 50 * 0.3
+            scores['pitch_variability'] = pitch_std / variability_threshold * 0.3
         
         # 2. 에너지 기반 신호 (큰 음량 = 비명)
         energy_mean = audio_features.get('energy', {}).get('mean', 0)
         energy_std = audio_features.get('energy', {}).get('std', 0)
         
-        # 에너지 정규화 (0-1)
-        # 높은 에너지 + 높은 변동성 = 비명 가능성
-        scores['high_energy'] = min(1.0, energy_mean / 0.5)  # 정규화
-        scores['energy_volatility'] = min(1.0, energy_std / 0.3)
+        # config에서 임계값 사용
+        energy_norm = self.energy_normalization
+        energy_vol = self.energy_volatility_threshold
+        
+        scores['high_energy'] = min(1.0, energy_mean / energy_norm)
+        scores['energy_volatility'] = min(1.0, energy_std / energy_vol)
         
         # 3. 음성 속도 기반 신호 (빠른 속도 = 긴박)
         speech_rate = audio_features.get('speech_rate', {}).get('estimated_syllables_per_second', 0)
         
-        # 일반적인 음성: 3-5 음절/초
-        # 긴박한 상황: 6+ 음절/초
-        if speech_rate > 6:
-            scores['fast_speech_rate'] = min(1.0, (speech_rate - 6) / 4)
+        # config에서 임계값 사용
+        fast_threshold = self.speech_rate_fast_threshold
+        
+        if speech_rate > fast_threshold:
+            scores['fast_speech_rate'] = min(1.0, (speech_rate - fast_threshold) / 4)
         else:
             scores['fast_speech_rate'] = 0.0
         
         # 4. 유성음 비율 (매우 낮은 비율 = 비명, 샤우팅)
         voiced_ratio = audio_features.get('voiced_unvoiced_ratio', {}).get('voiced_ratio', 0.5)
         
-        # 정상적인 음성: 0.5-0.8의 유성음 비율
-        # 비명/샤우팅: 0.2 이하의 유성음 비율
-        if voiced_ratio < 0.3:
+        # config에서 임계값 사용
+        voiced_threshold = self.voiced_ratio_low_threshold
+        
+        if voiced_ratio < voiced_threshold:
             scores['low_voiced_ratio'] = 1.0 - voiced_ratio
         else:
             scores['low_voiced_ratio'] = 0.0
@@ -290,17 +345,19 @@ class VoiceCharacteristicsAnalyzer:
         jitter = audio_features.get('jitter_shimmer', {}).get('jitter', 0)
         shimmer = audio_features.get('jitter_shimmer', {}).get('shimmer', 0)
         
-        # 정상: 지터 < 0.05, 시머 < 0.05
-        # 불안/떨림: > 0.1
-        if jitter > 0.1:
-            scores['high_jitter'] = min(1.0, jitter / 0.2)
-        else:
-            scores['high_jitter'] = max(0.0, jitter / 0.1) * 0.3
+        # config에서 임계값 사용
+        jitter_thresh = self.jitter_threshold
+        shimmer_thresh = self.shimmer_threshold
         
-        if shimmer > 0.1:
-            scores['high_shimmer'] = min(1.0, shimmer / 0.2)
+        if jitter > jitter_thresh:
+            scores['high_jitter'] = min(1.0, jitter / (jitter_thresh * 2))
         else:
-            scores['high_shimmer'] = max(0.0, shimmer / 0.1) * 0.3
+            scores['high_jitter'] = max(0.0, jitter / jitter_thresh) * 0.3
+        
+        if shimmer > shimmer_thresh:
+            scores['high_shimmer'] = min(1.0, shimmer / (shimmer_thresh * 2))
+        else:
+            scores['high_shimmer'] = max(0.0, shimmer / shimmer_thresh) * 0.3
         
         return scores
     
@@ -341,15 +398,15 @@ class VoiceCharacteristicsAnalyzer:
         }
         llm_score = priority_weights.get(llm_priority, 0.5)
         
-        # 최종 판정: LLM(60%) + 음성 특성(40%)
-        final_score = (llm_score * 0.6) + (voice_emergency_score * 0.4)
+        # config에서 가중치 사용
+        final_score = (llm_score * self.llm_weight) + (voice_emergency_score * self.voice_weight)
         
-        # 최종 우선순위 결정
-        if final_score >= 0.85:
+        # config에서 우선순위 임계값 사용
+        if final_score >= self.priority_critical:
             final_priority = 'CRITICAL'
-        elif final_score >= 0.65:
+        elif final_score >= self.priority_high:
             final_priority = 'HIGH'
-        elif final_score >= 0.40:
+        elif final_score >= self.priority_medium:
             final_priority = 'MEDIUM'
         else:
             final_priority = 'LOW'

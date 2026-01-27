@@ -45,6 +45,22 @@ except ImportError:
     PIL_AVAILABLE = False
     print("⚠️  Pillow가 설치되지 않았습니다. 이미지 처리 기능이 제한됩니다.")
 
+# 설정 관리자 임포트
+try:
+    from core.config_manager import get_config, get_prompt, get_openai_config, get_api_key
+    CONFIG_AVAILABLE = True
+except ImportError:
+    CONFIG_AVAILABLE = False
+    # 기본값 함수들
+    def get_config(*keys, default=None):
+        return default
+    def get_prompt(prompt_type='system'):
+        return ""
+    def get_openai_config(key, default=None):
+        return default
+    def get_api_key(service='openai'):
+        return os.getenv('OPENAI_API_KEY')
+
 # 음성 특성 분석기 임포트
 try:
     from core.voice_characteristics import VoiceCharacteristicsAnalyzer
@@ -56,18 +72,41 @@ except ImportError:
 class MultimodalAnalyzer:
     """멀티모달 컨텍스트 분석기 (오디오 + 비전)"""
     
-    def __init__(self, model="gpt-4o-mini"):
+    # 기본 시스템 프롬프트 (config가 없을 때 사용)
+    DEFAULT_SYSTEM_PROMPT = """당신은 음성과 이미지를 함께 분석하는 상황 분석 AI입니다. 객관적으로 상황을 파악하고 분석하세요.
+
+다음을 JSON으로만 반환하세요:
+{
+  "context": "맥락 설명",
+  "urgency": "위급도 (낮음/중간/높음/긴급)",
+  "situation": "상황 분석",
+  "situation_type": "상황 유형",
+  "is_emergency": true/false,
+  "priority": "CRITICAL/HIGH/MEDIUM/LOW",
+  "action": "권장 조치"
+}"""
+    
+    def __init__(self, model: str = None):
         """
         멀티모달 분석기 초기화
         
         Args:
-            model: 사용할 OpenAI 모델 (기본값: gpt-4o-mini, 비전 지원, 빠름)
+            model: 사용할 OpenAI 모델 (None이면 config에서 로드)
         """
-        self.model = model
-        self.api_key = os.getenv('OPENAI_API_KEY')
+        # 모델 설정 (인자 > config > 기본값)
+        self.model = model or get_config('model', default='gpt-4o-mini')
+        
+        # API 키 로드 (환경변수 > .env > config.yaml)
+        self.api_key = get_api_key('openai')
         
         if not self.api_key:
-            raise ValueError("❌ OPENAI_API_KEY가 .env에 설정되지 않았습니다")
+            raise ValueError(
+                "❌ OpenAI API 키가 설정되지 않았습니다.\n"
+                "   다음 방법 중 하나로 설정하세요:\n"
+                "   1. config/config.yaml의 api_keys.openai에 입력\n"
+                "   2. config/.env 파일에 OPENAI_API_KEY=sk-... 형식으로 입력\n"
+                "   3. 환경변수로 설정: export OPENAI_API_KEY=sk-..."
+            )
         
         self.client = OpenAI(api_key=self.api_key)
         
@@ -77,49 +116,13 @@ class MultimodalAnalyzer:
         else:
             self.voice_analyzer = None
         
-        # 시스템 프롬프트
-        self.system_prompt = """당신은 음성과 이미지를 함께 분석하는 상황 분석 AI입니다. 객관적으로 상황을 파악하고 분석하세요.
-
-⚠️ 특히 다음의 긴급 키워드와 시각적 신호에 주의하세요:
-
-**음성 긴급 키워드:**
-- "살려줘", "도와줘", "긴급", "119", "경찰", "신고", "침입", "도움", "위험", "피해", "사고", "화재", "폭발", "공격"
-
-**시각적 긴급 신호:**
-- 화재, 연기, 불꽃
-- 침입자, 의심스러운 인물
-- 쓰러진 사람, 부상
-- 위험한 상황
-- 혼란스러운 장면, 파괴된 환경
-
-**멀티모달 분석 원칙:**
-1. 음성과 시각 정보가 일치하는지 확인
-2. 한쪽만 위험 신호가 있어도 주의 깊게 판단
-3. 시각 정보로 음성 내용의 진위 검증
-4. 컨텍스트를 종합하여 전체 상황 파악
-
-다음을 JSON으로만 반환하세요 (다른 텍스트 없이):
-{
-  "context": "음성과 이미지를 종합한 맥락 설명",
-  "urgency": "위급도 (낮음/중간/높음/긴급 중 하나)",
-  "urgency_reason": "왜 그 위급도인지 간단히 설명",
-  "situation": "상황을 2-3줄로 상세히 분석",
-  "situation_type": "상황 유형 (업무/긴급/의료응급/보안/일상/정보요청/불만/기타 등)",
-  "emotional_state": "감정 상태 (긍정/중립/부정/공포/절박/분노 등)",
-  "visual_content": "이미지/비디오에서 관찰된 내용 요약",
-  "audio_visual_consistency": "음성과 시각 정보의 일치도 (일치/불일치/부분일치)",
-  "action": "권장 즉시 조치",
-  "is_emergency": true 또는 false,
-  "emergency_reason": "긴급 판정 이유 (긴급이 아니면 null)",
-  "priority": "우선순위 (CRITICAL/HIGH/MEDIUM/LOW 중 하나)"
-}
-
-📌 긴급(CRITICAL) 판정 기준:
-- 신체 위협 (음성 또는 시각)
-- 재난 징후 (화재, 폭발, 붕괴 등)
-- 범죄 현장 (침입, 강도, 폭행 등)
-- 의료 응급 (쓰러진 사람, 부상, 심한 출혈 등)
-- 기타 극도의 위험 상황"""
+        # 시스템 프롬프트 (config에서 로드)
+        self.system_prompt = get_prompt('system') or self.DEFAULT_SYSTEM_PROMPT
+        
+        # OpenAI API 설정
+        self.max_tokens = get_openai_config('max_tokens', default=800)
+        self.temperature = get_openai_config('temperature', default=0.3)
+        self.image_detail = get_openai_config('image_detail', default='low')
     
     def encode_image_to_base64(self, image_source: Union[str, np.ndarray], max_size: int = 1024) -> str:
         """
@@ -213,7 +216,6 @@ class MultimodalAnalyzer:
                 user_message += f"\n\n**추가 정보:** {additional_context}"
             
             # OpenAI API 호출 (Vision 지원)
-            # detail을 "low"로 설정하여 처리 속도 향상 (고해상도 불필요)
             response = self.client.chat.completions.create(
                 model=self.model,
                 messages=[
@@ -232,14 +234,14 @@ class MultimodalAnalyzer:
                                 "type": "image_url",
                                 "image_url": {
                                     "url": f"data:image/jpeg;base64,{base64_image}",
-                                    "detail": "low"  # 속도 향상을 위해 low 사용
+                                    "detail": self.image_detail  # config에서 로드
                                 }
                             }
                         ]
                     }
                 ],
-                max_tokens=800,  # 토큰 수 줄여서 속도 향상
-                temperature=0.3
+                max_tokens=self.max_tokens,  # config에서 로드
+                temperature=self.temperature  # config에서 로드
             )
             
             # 응답 파싱
