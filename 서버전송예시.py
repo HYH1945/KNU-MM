@@ -1,8 +1,9 @@
 import requests
 
-# 1. 서버 주소 (서버장이 제공하는 ngrok 주소로 수정)
+# 1. 서버 주소 
 SERVER_URL = "https://invocative-guttate-tammy.ngrok-free.dev/publish"
 
+# 서버 전송 함수 예씨
 def send_angle(angle, source_name="예시) YOLO 등"):
     payload = {
         "source": source_name,
@@ -24,5 +25,5 @@ def send_angle(angle, source_name="예시) YOLO 등"):
         print(f"⚠️ 서버 연결 에러: {e}")
 
 # --- 사용 예시 ---
-# 180도 방향에서 객체가 감지되었을 때 호출
+# 180도 방향에서 객체 detection시 
 send_angle(180.0, "YOLO_TEAM")
