@@ -29,6 +29,9 @@ numpy==2.2.6
 # 🎥 컴퓨터 비전 - OpenCV (카메라 모니터링용)
 opencv-python>=4.8.0
 
+# 이미지 처리 - Pillow (멀티모달 분석용)
+Pillow>=10.0.0
+
 # 토크나이저 - LLM 토큰 계산
 tiktoken==0.12.0
 
