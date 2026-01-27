@@ -82,6 +82,10 @@ def main():
     model = YOLO('yolov8n.pt')
     print("YOLO model loaded successfully!")
     print(f"YOLO device: {device}")
+
+    use_tracking = True
+    tracker_cfg = "ocsort.yaml"
+    print(f"Tracking: {tracker_cfg}" if use_tracking else "Tracking: disabled")
     
     ptz_controller = PTZCameraController(CAMERA_IP, CAMERA_PORT, CAMERA_USER, CAMERA_PASSWORD)
 
@@ -124,8 +128,23 @@ def main():
             
             # N프레임마다만 YOLO 추론 수행 (성능 최적화)
             if frame_count % skip_frames == 0:
-                # YOLO 추론 수행 (conf=0.5는 확신도 50% 이상인 것만 표시)
-                results = model(frame, conf=0.5, device=device, verbose=False)
+                # YOLO 추론/추적 수행 (conf=0.5는 확신도 50% 이상인 것만 표시)
+                if use_tracking:
+                    try:
+                        results = model.track(
+                            frame,
+                            conf=0.5,
+                            device=device,
+                            tracker=tracker_cfg,
+                            persist=True,
+                            verbose=False,
+                        )
+                    except Exception as e:
+                        print(f"Tracking error: {e} -> fallback to detection")
+                        use_tracking = False
+                        results = model(frame, conf=0.5, device=device, verbose=False)
+                else:
+                    results = model(frame, conf=0.5, device=device, verbose=False)
                 last_results = results
             
             # 마지막 추론 결과를 사용하여 프레임에 박스 그리기
