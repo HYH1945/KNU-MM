@@ -2,7 +2,9 @@ import cv2
 import threading
 import os
 import time
+from pathlib import Path
 import torch
+import ultralytics
 from dotenv import load_dotenv
 from onvif import ONVIFCamera
 from ultralytics import YOLO
@@ -83,9 +85,25 @@ def main():
     print("YOLO model loaded successfully!")
     print(f"YOLO device: {device}")
 
-    use_tracking = True
-    tracker_cfg = "ocsort.yaml"
-    print(f"Tracking: {tracker_cfg}" if use_tracking else "Tracking: disabled")
+    def resolve_tracker_cfg(name):
+        if os.path.isfile(name):
+            return name
+        try:
+            pkg_dir = Path(ultralytics.__file__).resolve().parent
+            candidate = pkg_dir / "cfg" / "trackers" / name
+            if candidate.exists():
+                return str(candidate)
+        except Exception:
+            pass
+        return None
+
+    tracker_cfg_name = "botsort.yaml"
+    tracker_cfg = resolve_tracker_cfg(tracker_cfg_name)
+    use_tracking = tracker_cfg is not None
+    if use_tracking:
+        print(f"Tracking: {tracker_cfg}")
+    else:
+        print(f"Tracking disabled: '{tracker_cfg_name}' not found")
     
     ptz_controller = PTZCameraController(CAMERA_IP, CAMERA_PORT, CAMERA_USER, CAMERA_PASSWORD)
 
@@ -142,6 +160,7 @@ def main():
                     except Exception as e:
                         print(f"Tracking error: {e} -> fallback to detection")
                         use_tracking = False
+                        model.predictor = None
                         results = model(frame, conf=0.5, device=device, verbose=False)
                 else:
                     results = model(frame, conf=0.5, device=device, verbose=False)
