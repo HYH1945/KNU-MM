@@ -1,0 +1,183 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>관제 대시보드</title>
+    <style>
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: #1a1a1a; color: white; display: flex; flex-direction: column; align-items: center; }
+        .container { display: flex; gap: 30px; margin-top: 20px; width: 95%; }
+        .card { background: #2d2d2d; border-radius: 15px; padding: 20px; flex: 1; box-shadow: 0 4px 15px rgba(0,0,0,0.5); display: flex; flex-direction: column; }
+        #radar-container { position: relative; width: 200px; height: 200px; border: 2px solid #444; border-radius: 50%; margin: 0 auto; }
+        #pointer { 
+            width: 4px; height: 100px; background: #ff4757; position: absolute; 
+            top: 50%; left: 50%; transform-origin: top center; transition: 0.5s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+        }
+        #log { 
+            height: 350px; overflow-y: auto; background: #111; padding: 10px; 
+            font-size: 13px; border-radius: 5px; color: #eee;
+            display: flex; flex-direction: column; gap: 6px;
+        }
+        .log-entry { background: #1f1f1f; padding: 8px; border-radius: 6px; border-left: 4px solid #444; }
+        .tag { background: #3d3d3d; color: #2ed573; padding: 2px 6px; border-radius: 4px; font-size: 11px; margin-right: 4px; border: 1px solid #444; }
+        #logModal { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.85); z-index: 1000; }
+        .modal-content { background: #2d2d2d; width: 80%; max-width: 750px; margin: 5% auto; padding: 25px; border-radius: 15px; position: relative; box-shadow: 0 5px 20px rgba(0,0,0,1); }
+        #dbLogList { height: 450px; overflow-y: auto; background: #111; padding: 15px; color: #2ed573; font-family: 'Courier New', monospace; border-radius: 5px; margin-top: 15px; }
+        .close-btn { position: absolute; right: 25px; top: 15px; cursor: pointer; font-size: 30px; color: #aaa; }
+    </style>
+</head>
+<body>
+    <h1>대시보드</h1>
+    
+    <div style="margin-bottom: 10px;">
+        <button onclick="openLogModal()" style="padding: 10px 20px; background: #1e90ff; color: white; border: none; border-radius: 8px; cursor: pointer; font-weight: bold;">
+            과거 로그 조회
+        </button>
+    </div>
+
+    <div class="container">
+        <div class="card">
+            <h3>카메라 현재 각도</h3>
+            <div id="radar-container">
+                <div id="pointer"></div>
+            </div>
+            <p id="angle-display" style="text-align:center; font-size:20px; font-weight:bold;">0°</p>
+        </div>
+        <div class="card">
+            <h3>실시간 이벤트 로그</h3>
+            <div id="log"></div>
+        </div>
+    </div>
+
+    <div id="logModal">
+        <div class="modal-content">
+            <span class="close-btn" onclick="closeLogModal()">&times;</span>
+            <h2 style="margin-top: 0;">DB 로그 기록 (최근 50개)</h2>
+            <div id="dbLogList">조회된 데이터가 없습니다.</div>
+            <button onclick="fetchDbLogs()" style="margin-top: 15px; width: 100%; padding: 12px; background: #2ed573; border: none; color: black; font-weight: bold; border-radius: 5px; cursor: pointer;">
+                새로고침
+            </button>
+        </div>
+    </div>
+
+    <script>
+        const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+        const wsUrl = `${protocol}//${window.location.host}/ws/monitor`;
+        const ws = new WebSocket(wsUrl);
+
+        const pointer = document.getElementById('pointer');
+        const log = document.getElementById('log');
+        const angleDisplay = document.getElementById('angle-display');
+
+        // 시간을 YYYY-MM-DD-HH:mm:ss 형식으로 포맷팅하는 함수
+        function formatKST(date) {
+            const d = new Date(date.toLocaleString('en-US', { timeZone: 'Asia/Seoul' }));
+            const pad = (n) => n.toString().padStart(2, '0');
+            return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}-${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+        }
+
+        ws.onmessage = (event) => { 
+            const rawData = JSON.parse(event.data);
+            
+            // 1. 수신 시간 생성 (KST)
+            const serverTime = formatKST(new Date());
+
+            const payload = rawData.data && typeof rawData.data === 'object' ? rawData.data : rawData;
+            const entry = document.createElement('div');
+            entry.className = 'log-entry';
+            
+            if (rawData.type === "CAMERA_MOVE") entry.style.borderLeftColor = "#ff4757";
+            else if (rawData.type === "AUDIO_DETECTION") entry.style.borderLeftColor = "#1e90ff";
+            else entry.style.borderLeftColor = "#ffa500";
+
+            let tagsHtml = "";
+            Object.entries(payload).forEach(([key, value]) => {
+                const forbidden = ['source', 'type', 'data', 'time_str', 'timestamp'];
+                if (!forbidden.includes(key.toLowerCase()) && typeof value !== 'object') {
+                    tagsHtml += `<span class="tag"><b>${key}:</b> ${value}</span>`;
+                }
+            });
+
+            entry.innerHTML = `
+                <div style="display: flex; justify-content: space-between; margin-bottom: 4px;">
+                    <strong style="color: #1e90ff; font-size: 14px;">${rawData.source || 'UNKNOWN'}</strong>
+                    <span style="color: #888; font-size: 11px;">${serverTime}</span>
+                </div>
+                <div style="font-size: 11px; margin-bottom: 4px; color: #aaa;">[${rawData.type}]</div>
+                <div style="display: flex; flex-wrap: wrap; gap: 4px; margin-top: 4px;">${tagsHtml}</div>
+            `;
+
+            log.prepend(entry);
+
+            if (rawData.type === "CAMERA_MOVE") {
+                const rawAngle = payload.angle ?? payload.target_pan ?? rawData.angle ?? rawData.target_pan;
+                if (rawAngle !== undefined && rawAngle !== null) {
+                    let numericAngle = parseFloat(rawAngle);
+                    if (!isNaN(numericAngle)) {
+                        numericAngle = ((numericAngle % 360) + 360) % 360;
+                        pointer.style.transform = `translate(-50%, 0%) rotate(${numericAngle + 180}deg)`;
+                        angleDisplay.innerText = `${numericAngle.toFixed(1)}°`;
+                    }
+                }
+            }
+
+            if (log.childNodes.length > 20) log.removeChild(log.lastChild);
+        };
+
+        async function openLogModal() { document.getElementById('logModal').style.display = 'block'; await fetchDbLogs(); }
+        function closeLogModal() { document.getElementById('logModal').style.display = 'none'; }
+
+        async function fetchDbLogs() {
+            const listDiv = document.getElementById('dbLogList');
+            listDiv.innerHTML = "데이터를 불러오는 중...";
+            
+            try {
+                const response = await fetch("/logs");
+                const logs = await response.json();
+                listDiv.innerHTML = ""; 
+                
+                if (logs.length === 0) {
+                    listDiv.innerHTML = "저장된 로그가 없습니다.";
+                    return;
+                }
+
+                logs.forEach(data => {
+                    const item = document.createElement('div');
+                    item.style.borderBottom = "1px solid #444";
+                    item.style.padding = "10px 5px";
+                    item.style.fontSize = "12px";
+                    
+                    // DB 시간 한국 시간으로 보정
+                    // "2024-05-22 07:00:00" 처럼 올 경우를 대비해 보정 로직 강화
+                    let dbDate;
+                    if (data.timestamp) {
+                        // SQLite 등에서 T나 Z 없이 올 경우 강제로 KST로 인식하지 않게 ISO 형식으로 보정할 수 있음
+                        dbDate = new Date(data.timestamp.replace(" ", "T") + (data.timestamp.includes("Z") ? "" : "Z"));
+                        if (isNaN(dbDate)) dbDate = new Date(data.timestamp); // 보정 실패 시 원본 시도
+                    } else {
+                        dbDate = new Date();
+                    }
+                    
+                    const kstTime = formatKST(dbDate);
+
+                    const header = `<div style="margin-bottom: 5px;">
+                        <span style="color: #888;">[${kstTime}]</span> 
+                        <strong style="color: #1e90ff; font-size: 14px; margin-left: 5px;">${data.source}</strong> 
+                        <span style="background: #444; padding: 1px 5px; border-radius: 3px; font-size: 10px; margin-left: 5px;">${data.type}</span>
+                    </div>`;
+
+                    let details = "";
+                    Object.entries(data).forEach(([key, value]) => {
+                        if (!['id', 'timestamp', 'source', 'type'].includes(key)) {
+                            details += `<span style="margin-right: 15px; color: #ccc;"><b>${key}:</b> <span style="color: #2ed573;">${value}</span></span>`;
+                        }
+                    });
+
+                    item.innerHTML = header + `<div style="display: flex; flex-wrap: wrap;">${details}</div>`;
+                    listDiv.appendChild(item);
+                });
+            } catch (e) {
+                listDiv.innerHTML = "❌ 에러 발생: " + e.message;
+            }
+        }
+    </script>
+</body>
+</html>
