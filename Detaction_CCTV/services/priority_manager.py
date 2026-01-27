@@ -1,61 +1,72 @@
-from typing import List, Dict, Optional
+from typing import List, Dict
+import math
 
 class VisualPriorityManager:
     """
-    ReID가 적용된 객체들 중에서 '누구를 추적할지' 결정하는 클래스
+    탐지된 객체들의 우선순위를 평가하고 정렬하는 클래스
     """
-    def __init__(self):
-        self.current_target_perm_id: Optional[int] = None
-        self.LOCK_BONUS = 50.0   # 한 번 문 대상은 놓치지 않도록 가산점 부여
-        self.SIZE_WEIGHT = 1.0   # 가까운(큰) 물체 선호 가중치
+    # --- 우선순위 결정 파라미터 ---
+    
+    # 각 요소의 가중치
+    WEIGHTS = {
+        'type': 0.6,
+        'size': 0.3,
+        'position': 0.1
+    }
+    
+    # 객체 종류별 점수
+    TYPE_SCORES = {
+        'person': 1.0,  # 사람은 최우선
+        'car': 0.5,
+        'motorcycle': 0.5,
+        'bus': 0.4,
+        'truck': 0.4,
+        'default': 0.2  # 나머지
+    }
 
-    def select_target(self, objects: List[Dict], frame_width: int) -> Optional[Dict]:
+    def calculate_priorities(self, objects: List[Dict], frame_width: int, frame_height: int) -> List[Dict]:
         """
+        모든 객체에 대해 우선순위 점수를 계산하고, 점수가 높은 순으로 정렬된 리스트를 반환합니다.
+
         [입력]
-         - objects: ReID가 완료된 객체 리스트 (permanent_id 포함)
-         - frame_width: 화면 너비 (중앙 계산용, 여기서는 크기 점수용으로 활용 가능)
+         - objects: ReID가 완료된 객체 리스트
+         - frame_width: 프레임 너비
+         - frame_height: 프레임 높이
         
         [출력]
-         - 최우선 추적 대상 객체 1개 (없으면 None)
+         - 'priority_score'가 추가되고 점수 순으로 정렬된 객체 리스트
         """
-        best_obj = None
-        max_score = -1.0
-        
-        # 화면 전체 면적 (대략적인 값, 가로x가로 비율로 계산)
-        # 실제 높이를 안 받는 구조라 너비 제곱으로 근사치 사용 혹은 단순 크기 비교
-        
+        if not objects:
+            return []
+
+        frame_area = frame_width * frame_height
+        frame_center_x = frame_width / 2
+        frame_center_y = frame_height / 2
+        max_dist = math.sqrt(frame_center_x**2 + frame_center_y**2)
+
         for obj in objects:
-            score = 0.0
-            
-            # 1. 크기 점수 (화면에 크게 잡힐수록 = 가까울수록 점수 높음)
-            # box: [x1, y1, x2, y2]
+            # 1. 종류 점수 (Type Score)
+            obj_name = obj.get('name', '')
+            type_score = self.TYPE_SCORES.get(obj_name, self.TYPE_SCORES['default'])
+
+            # 2. 크기 점수 (Size Score)
             box = obj['box']
             area = (box[2] - box[0]) * (box[3] - box[1])
-            
-            # 면적이 클수록 점수 높음 (단순 비례)
-            score += (area / 1000.0) * self.SIZE_WEIGHT
-            
-            # 2. 락킹(Locking) 보너스 (Hysteresis)
-            # 이전에 추적하던 영구 ID(permanent_id)와 같으면 가산점
-            # YOLO ID가 바뀌어도 영구 ID는 유지되므로 추적이 끊기지 않음
-            if self.current_target_perm_id is not None:
-                if obj.get('permanent_id') == self.current_target_perm_id:
-                    score += self.LOCK_BONUS
+            size_score = area / frame_area if frame_area > 0 else 0
 
-            # 디버깅용 점수 기록
+            # 3. 위치 점수 (Position Score)
+            obj_center_x, obj_center_y = obj['center']
+            dist = math.sqrt((obj_center_x - frame_center_x)**2 + (obj_center_y - frame_center_y)**2)
+            position_score = 1.0 - (dist / max_dist) if max_dist > 0 else 0
+            
+            # 최종 우선순위 점수 계산
+            score = (self.WEIGHTS['type'] * type_score) + \
+                    (self.WEIGHTS['size'] * size_score) + \
+                    (self.WEIGHTS['position'] * position_score)
+            
             obj['priority_score'] = score
-            
-            # 최댓값 갱신
-            if score > max_score:
-                max_score = score
-                best_obj = obj
 
-        # 타겟 갱신 로직
-        if best_obj:
-            # 타겟이 선정되면 그 ID를 기억해둠 (다음 프레임에 가산점 주려고)
-            self.current_target_perm_id = best_obj.get('permanent_id')
-        else:
-            # 아무도 없으면 타겟 해제
-            self.current_target_perm_id = None
-            
-        return best_obj
+        # 점수가 높은 순으로 객체 리스트 정렬
+        sorted_objects = sorted(objects, key=lambda o: o.get('priority_score', 0), reverse=True)
+        
+        return sorted_objects
