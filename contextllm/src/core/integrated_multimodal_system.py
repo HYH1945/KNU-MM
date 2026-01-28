@@ -29,12 +29,22 @@ from typing import Optional, Dict, Any, List, Tuple, Callable
 from dataclasses import dataclass
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
+# config 로드
+try:
+    from core.config_manager import get_config
+except ImportError:
+    try:
+        from config_manager import get_config
+    except ImportError:
+        def get_config(key, default=None):
+            return default
+
 try:
     import speech_recognition as sr
     SPEECH_RECOGNITION_AVAILABLE = True
 except ImportError:
+    sr = None
     SPEECH_RECOGNITION_AVAILABLE = False
-    print("⚠️  speech_recognition이 설치되지 않았습니다: pip install SpeechRecognition")
 
 try:
     from openai import OpenAI
@@ -43,7 +53,6 @@ try:
     OPENAI_AVAILABLE = True
 except ImportError:
     OPENAI_AVAILABLE = False
-    print("⚠️  OpenAI가 설치되지 않았습니다: pip install openai python-dotenv")
 
 # 내부 모듈 임포트
 try:
@@ -55,7 +64,6 @@ except ImportError:
         VOICE_CHARACTERISTICS_AVAILABLE = True
     except ImportError:
         VOICE_CHARACTERISTICS_AVAILABLE = False
-        print("⚠️  음성 특성 분석 모듈을 불러올 수 없습니다")
 
 try:
     from core.multimodal_analyzer import MultimodalAnalyzer
@@ -66,7 +74,6 @@ except ImportError:
         MULTIMODAL_ANALYZER_AVAILABLE = True
     except ImportError:
         MULTIMODAL_ANALYZER_AVAILABLE = False
-        print("⚠️  멀티모달 분석 모듈을 불러올 수 없습니다")
 
 
 @dataclass
@@ -232,10 +239,8 @@ class WebcamVideoSource(BaseVideoSource):
             self.cap = cv2.VideoCapture(self.camera_id)
             if self.cap.isOpened():
                 self.is_opened = True
-                print(f"✅ 웹캠 {self.camera_id} 열림")
                 return True
             else:
-                print(f"❌ 웹캠 {self.camera_id}를 열 수 없습니다")
                 return False
     
     def close(self):
@@ -245,7 +250,6 @@ class WebcamVideoSource(BaseVideoSource):
                 self.cap.release()
                 self.cap = None
                 self.is_opened = False
-                print("✅ 웹캠 닫힘")
     
     def capture_frame(self) -> Optional[np.ndarray]:
         """단일 프레임 캡처"""
@@ -269,7 +273,6 @@ class WebcamVideoSource(BaseVideoSource):
         
         with self.lock:
             if not self.is_opened or not self.cap:
-                print("❌ 웹캠이 열려있지 않습니다")
                 return frames, timestamps
             
             original_fps = self.cap.get(cv2.CAP_PROP_FPS) or 30.0
@@ -277,8 +280,6 @@ class WebcamVideoSource(BaseVideoSource):
             
             start_time = time.time()
             frame_count = 0
-            
-            print(f"📹 웹캠 캡처 중 ({duration}초, {target_fps}fps)...")
             
             while (time.time() - start_time) < duration:
                 ret, frame = self.cap.read()
@@ -291,8 +292,6 @@ class WebcamVideoSource(BaseVideoSource):
                     timestamps.append(timestamp)
                 
                 frame_count += 1
-            
-            print(f"   ✅ {len(frames)}개 프레임 캡처 완료")
         
         return frames, timestamps
     
@@ -315,6 +314,17 @@ class NetworkVideoSource(BaseVideoSource):
             url: 카메라 URL (예: rtsp://192.168.1.100:554/stream, http://192.168.1.100:8080/video)
         """
         super().__init__()
+        # URL 검증 (허용된 프로토콜만)
+        allowed_protocols = ('rtsp://', 'http://', 'https://')
+        if not any(url.lower().startswith(p) for p in allowed_protocols):
+            raise ValueError(f"허용되지 않은 프로토콜입니다. 허용: {allowed_protocols}")
+        
+        # 로컬호스트/내부 IP 차단 (선택적 - SSRF 방지)
+        # from urllib.parse import urlparse
+        # parsed = urlparse(url)
+        # if parsed.hostname in ('localhost', '127.0.0.1', '0.0.0.0'):
+        #     raise ValueError("로컬 주소는 허용되지 않습니다")
+        
         self.url = url
         self.cap = None
         self.source_type = VideoSourceType.NETWORK
@@ -325,7 +335,6 @@ class NetworkVideoSource(BaseVideoSource):
             if self.is_opened:
                 return True
             
-            print(f"🌐 네트워크 카메라 연결 중: {self.url}")
             self.cap = cv2.VideoCapture(self.url)
             
             # 버퍼 크기 줄이기 (지연 감소)
@@ -333,10 +342,8 @@ class NetworkVideoSource(BaseVideoSource):
             
             if self.cap.isOpened():
                 self.is_opened = True
-                print(f"✅ 네트워크 카메라 연결됨: {self.url}")
                 return True
             else:
-                print(f"❌ 네트워크 카메라 연결 실패: {self.url}")
                 return False
     
     def close(self):
@@ -346,7 +353,6 @@ class NetworkVideoSource(BaseVideoSource):
                 self.cap.release()
                 self.cap = None
                 self.is_opened = False
-                print("✅ 네트워크 카메라 연결 종료")
     
     def capture_frame(self) -> Optional[np.ndarray]:
         """단일 프레임 캡처"""
@@ -446,31 +452,25 @@ class FileVideoSource(BaseVideoSource):
                 return True
             
             if not self.file_path.exists():
-                print(f"❌ 파일을 찾을 수 없습니다: {self.file_path}")
                 return False
             
             if self.is_video:
                 self.cap = cv2.VideoCapture(str(self.file_path))
                 if self.cap.isOpened():
                     self.is_opened = True
-                    print(f"✅ 비디오 파일 열림: {self.file_path.name}")
                     return True
                 else:
-                    print(f"❌ 비디오 파일을 열 수 없습니다: {self.file_path}")
                     return False
             
             elif self.is_image:
                 self.image = cv2.imread(str(self.file_path))
                 if self.image is not None:
                     self.is_opened = True
-                    print(f"✅ 이미지 파일 열림: {self.file_path.name}")
                     return True
                 else:
-                    print(f"❌ 이미지 파일을 열 수 없습니다: {self.file_path}")
                     return False
             
             else:
-                print(f"❌ 지원하지 않는 파일 형식: {self.file_path.suffix}")
                 return False
     
     def close(self):
@@ -481,7 +481,6 @@ class FileVideoSource(BaseVideoSource):
                 self.cap = None
             self.image = None
             self.is_opened = False
-            print(f"✅ 파일 닫힘: {self.file_path.name}")
     
     def capture_frame(self) -> Optional[np.ndarray]:
         """프레임/이미지 가져오기"""
@@ -515,19 +514,16 @@ class FileVideoSource(BaseVideoSource):
         
         with self.lock:
             if not self.is_opened:
-                print("❌ 파일이 열려있지 않습니다")
                 return frames, timestamps
             
             if self.is_image:
                 # 이미지인 경우 같은 이미지를 여러 번 반환
                 num_frames = int(duration * target_fps)
-                print(f"📷 이미지에서 {num_frames}개 프레임 생성...")
                 
                 for i in range(num_frames):
                     frames.append(self.image.copy())
                     timestamps.append(i / target_fps)
                 
-                print(f"   ✅ {len(frames)}개 프레임 생성 완료")
                 return frames, timestamps
             
             elif self.is_video and self.cap:
@@ -540,8 +536,6 @@ class FileVideoSource(BaseVideoSource):
                 
                 frame_interval = int(original_fps / target_fps) if target_fps < original_fps else 1
                 frame_count = 0
-                
-                print(f"📹 비디오 파일에서 캡처 중 ({actual_duration:.1f}초, {target_fps}fps)...")
                 
                 # 비디오 처음으로 되감기
                 self.cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
@@ -560,8 +554,6 @@ class FileVideoSource(BaseVideoSource):
                         timestamps.append(current_time)
                     
                     frame_count += 1
-                
-                print(f"   ✅ {len(frames)}개 프레임 캡처 완료")
         
         return frames, timestamps
     
@@ -608,9 +600,17 @@ class TestsetVideoSource(BaseVideoSource):
         self.files: List[Path] = []
         self.current_index = 0
         self.current_source: Optional[FileVideoSource] = None
+        
+        # 초기화 시 파일 스캔 (open 전에도 파일 목록 확인 가능)
+        self._scan_files()
     
     def _scan_files(self):
         """폴더 내 미디어 파일 스캔"""
+        if not self.folder_path.exists() or not self.folder_path.is_dir():
+            print(f"⚠️  폴더가 존재하지 않거나 유효하지 않음: {self.folder_path}")
+            self.files = []
+            return
+        
         video_extensions = {'.mp4', '.avi', '.mov', '.mkv', '.webm', '.flv', '.wmv'}
         image_extensions = {'.jpg', '.jpeg', '.png', '.bmp', '.gif', '.webp'}
         all_extensions = video_extensions | image_extensions
@@ -619,10 +619,6 @@ class TestsetVideoSource(BaseVideoSource):
             f for f in self.folder_path.iterdir()
             if f.is_file() and f.suffix.lower() in all_extensions
         ])
-        
-        print(f"📁 테스트셋 폴더 스캔 완료: {len(self.files)}개 파일")
-        for f in self.files:
-            print(f"   - {f.name}")
     
     def open(self) -> bool:
         """테스트셋 폴더 열기"""
@@ -630,18 +626,19 @@ class TestsetVideoSource(BaseVideoSource):
             if self.is_opened:
                 return True
             
+            # 파일이 아직 스캔되지 않았으면 다시 스캔
+            if not self.files:
+                self._scan_files()
+            
             if not self.folder_path.exists():
-                print(f"❌ 폴더를 찾을 수 없습니다: {self.folder_path}")
                 return False
             
             if not self.folder_path.is_dir():
-                print(f"❌ 디렉토리가 아닙니다: {self.folder_path}")
                 return False
             
             self._scan_files()
             
             if not self.files:
-                print(f"❌ 폴더에 미디어 파일이 없습니다: {self.folder_path}")
                 return False
             
             # 첫 번째 파일 열기
@@ -650,7 +647,6 @@ class TestsetVideoSource(BaseVideoSource):
             
             if self.current_source.open():
                 self.is_opened = True
-                print(f"✅ 테스트셋 준비 완료: {self.folder_path.name}")
                 return True
             else:
                 return False
@@ -663,7 +659,6 @@ class TestsetVideoSource(BaseVideoSource):
                 self.current_source = None
             self.is_opened = False
             self.current_index = 0
-            print("✅ 테스트셋 닫힘")
     
     def _next_file(self) -> bool:
         """다음 파일로 이동"""
@@ -675,9 +670,7 @@ class TestsetVideoSource(BaseVideoSource):
         if self.current_index >= len(self.files):
             if self.loop:
                 self.current_index = 0
-                print("🔄 테스트셋 처음부터 다시 시작")
             else:
-                print("📁 테스트셋 끝에 도달")
                 return False
         
         self.current_source = FileVideoSource(str(self.files[self.current_index]))
@@ -687,7 +680,6 @@ class TestsetVideoSource(BaseVideoSource):
         """특정 인덱스의 파일 선택"""
         with self.lock:
             if index < 0 or index >= len(self.files):
-                print(f"❌ 잘못된 인덱스: {index} (0-{len(self.files)-1})")
                 return False
             
             if self.current_source:
@@ -697,9 +689,6 @@ class TestsetVideoSource(BaseVideoSource):
             self.current_source = FileVideoSource(str(self.files[index]))
             success = self.current_source.open()
             
-            if success:
-                print(f"📂 파일 선택: {self.files[index].name}")
-            
             return success
     
     def select_file_by_name(self, filename: str) -> bool:
@@ -708,7 +697,6 @@ class TestsetVideoSource(BaseVideoSource):
             if f.name == filename or f.stem == filename:
                 return self.select_file(i)
         
-        print(f"❌ 파일을 찾을 수 없습니다: {filename}")
         return False
     
     def capture_frame(self) -> Optional[np.ndarray]:
@@ -727,7 +715,6 @@ class TestsetVideoSource(BaseVideoSource):
         """현재 파일에서 비디오 세그먼트 캡처"""
         with self.lock:
             if not self.is_opened or not self.current_source:
-                print("❌ 테스트셋이 열려있지 않습니다")
                 return [], []
             
             return self.current_source.capture_video_segment(duration, target_fps)
@@ -825,7 +812,6 @@ class VideoCaptureManager:
         if self._video_source and self._video_source.is_opened:
             self._video_source.close()
         self._video_source = source
-        print(f"✅ 비디오 소스 설정됨: {source.source_type}")
     
     def get_source(self) -> Optional[BaseVideoSource]:
         """현재 비디오 소스 반환"""
@@ -847,10 +833,8 @@ class VideoCaptureManager:
             self.cap = cv2.VideoCapture(self.camera_id)
             if self.cap.isOpened():
                 self.is_opened = True
-                print(f"✅ 카메라 {self.camera_id} 열림")
                 return True
             else:
-                print(f"❌ 카메라 {self.camera_id}를 열 수 없습니다")
                 return False
     
     def close(self):
@@ -867,7 +851,6 @@ class VideoCaptureManager:
                 self.cap.release()
                 self.cap = None
                 self.is_opened = False
-                print("✅ 카메라 닫힘")
     
     def capture_frame(self) -> Optional[np.ndarray]:
         """단일 프레임 캡처"""
@@ -910,7 +893,6 @@ class VideoCaptureManager:
         
         with self.lock:
             if not self.is_opened or not self.cap:
-                print("❌ 카메라가 열려있지 않습니다")
                 return frames, timestamps
             
             # 원본 FPS 가져오기
@@ -919,8 +901,6 @@ class VideoCaptureManager:
             
             start_time = time.time()
             frame_count = 0
-            
-            print(f"📹 비디오 캡처 중 ({duration}초, {target_fps}fps)...")
             
             while (time.time() - start_time) < duration:
                 ret, frame = self.cap.read()
@@ -934,8 +914,6 @@ class VideoCaptureManager:
                     timestamps.append(timestamp)
                 
                 frame_count += 1
-            
-            print(f"   ✅ {len(frames)}개 프레임 캡처 완료")
         
         return frames, timestamps
 
@@ -943,30 +921,198 @@ class VideoCaptureManager:
 class SpeechDetector:
     """음성 감지 및 인식"""
     
-    def __init__(self, energy_threshold: int = 300, pause_threshold: float = 0.8):
+    def __init__(self, energy_threshold: int = 400, pause_threshold: float = 3.0, dynamic_threshold: bool = False):
         """
         Args:
-            energy_threshold: 음성 감지 에너지 임계값
-            pause_threshold: 문장 끝 판단 대기 시간 (초)
+            energy_threshold: 음성 감지 에너지 임계값 (낮을수록 민감함) - 기본값 400
+            pause_threshold: 문장 끝 판단 대기 시간 (초) - 기본값 3.0 (자연스러운 대화 흐름)
+                           3초 침묵 후 문장 끝으로 판단 → 자연스러운 대화 포함
+            dynamic_threshold: 동적 에너지 임계값 조정 여부 - False=고정(스피커 소리용), True=자동(실시간 조정)
         """
         if not SPEECH_RECOGNITION_AVAILABLE:
             raise ImportError("speech_recognition이 필요합니다: pip install SpeechRecognition")
         
         self.recognizer = sr.Recognizer()
-        self.recognizer.energy_threshold = energy_threshold
         self.recognizer.pause_threshold = pause_threshold
-        self.recognizer.dynamic_energy_threshold = True
+        # dynamic_energy_threshold 설정
+        # False: 고정 임계값 (스피커/유튜브 소리 인식에 더 좋음)
+        # True: 동적 조정 (실시간 마이크 입력에 좋음)
+        self.recognizer.dynamic_energy_threshold = dynamic_threshold
         
         # 마이크 초기화
         self.microphone = sr.Microphone()
         
-        # 주변 소음 조정
+        # 주변 소음 조정 후 에너지 임계값 설정
         with self.microphone as source:
-            print("🎤 주변 소음 조정 중...")
             self.recognizer.adjust_for_ambient_noise(source, duration=1)
-            print(f"   ✅ 에너지 임계값: {self.recognizer.energy_threshold}")
+            # 조정된 값을 그대로 사용 (추가 배수 없음)
+            self.recognizer.energy_threshold = max(energy_threshold, self.recognizer.energy_threshold)
+        
+        # 백그라운드 음성 인식용 저장소
+        self._bg_audio_queue = None
+        self._is_listening = False
     
-    def listen_for_speech(self, timeout: float = None, phrase_time_limit: float = None) -> Tuple[Optional[sr.AudioData], bool]:
+    def listen_and_recognize(self, timeout: float = None, phrase_time_limit: float = None, language: str = "ko-KR") -> Tuple[Optional[str], Optional[Any]]:
+        """
+        음성을 듣고 바로 인식 (감지 + 인식 통합)
+        pause_threshold 내에서 수집한 모든 음성을 인식
+        
+        Args:
+            timeout: 최대 대기 시간 (초) - None이면 무한 대기
+            phrase_time_limit: 최대 발화 시간 (초) - None이면 pause_threshold 사용
+            language: 인식 언어
+        
+        Returns:
+            (인식된 텍스트 또는 None, AudioData 또는 None)
+        """
+        try:
+            with self.microphone as source:
+                # pause_threshold 시간 동안 계속 수집하도록 설정
+                # phrase_time_limit=None이면, pause_threshold 시간만큼 대기 후 인식
+                # 예: pause_threshold=10초 → 10초 동안 계속 음성 수집 후 인식
+                audio = self.recognizer.listen(
+                    source, 
+                    timeout=timeout, 
+                    phrase_time_limit=phrase_time_limit
+                    # phrase_time_limit=None이 핵심: pause_threshold까지 기다린 후 인식
+                )
+                
+                # 오디오 길이 확인 (너무 짧으면 노이즈)
+                audio_data = audio.get_raw_data()
+                duration = len(audio_data) / (audio.sample_rate * audio.sample_width)
+                
+                if duration < 0.3:  # 0.5초 → 0.3초로 완화
+                    return None, None
+                
+                # 바로 텍스트 인식
+                try:
+                    text = self.recognizer.recognize_google(audio, language=language)
+                    return text, audio
+                except sr.UnknownValueError:
+                    # 음성은 감지됐지만 인식 불가
+                    return None, None
+                except sr.RequestError as e:
+                    print(f"❌ 음성 인식 API 오류: {e}")
+                    return None, None
+        
+        except sr.WaitTimeoutError:
+            return None, None
+        except Exception as e:
+            return None, None
+    
+    def start_background_listening(self, language: str = "ko-KR"):
+        """
+        백그라운드에서 계속 음성을 감지하고 인식
+        루프가 멈추지 않고 음성이 감지되면 큐에 추가
+        
+        Args:
+            language: 인식 언어
+        """
+        import queue
+        import threading
+        
+        if self._is_listening:
+            return  # 이미 실행 중
+        
+        self._is_listening = True
+        self._bg_audio_queue = queue.Queue()
+        
+        def background_worker():
+            """백그라운드 음성 인식 워커"""
+            
+            while self._is_listening:
+                try:
+                    with self.microphone as source:
+                        # 음성 감지
+                        audio = self.recognizer.listen(source, timeout=None)
+                        
+                        # 오디오 길이 확인
+                        audio_data = audio.get_raw_data()
+                        duration = len(audio_data) / (audio.sample_rate * audio.sample_width)
+                        
+                        if duration < 0.5:  # 0.5초 이상만 인식 시도
+                            continue
+                        
+                        # 텍스트 인식
+                        try:
+                            text = self.recognizer.recognize_google(audio, language=language)
+                            print(f"\n인식됨: {text}")
+                            # 큐에 추가 (메인 루프에서 꺼낼 수 있음)
+                            self._bg_audio_queue.put((text, audio))
+                        except sr.UnknownValueError:
+                            pass
+                        except sr.RequestError:
+                            pass
+                
+                except Exception:
+                    pass
+        
+        # 백그라운드 스레드 시작
+        bg_thread = threading.Thread(target=background_worker, daemon=True)
+        bg_thread.start()
+    
+    def get_recognized_speech(self):
+        """
+        백그라운드에서 인식된 음성 가져오기 (논블로킹)
+        
+        Returns:
+            (텍스트, 오디오) 또는 (None, None) - 큐가 비어있으면 None 반환
+        """
+        if not self._bg_audio_queue:
+            return None, None
+        
+        try:
+            return self._bg_audio_queue.get_nowait()
+        except:
+            return None, None
+    
+    def stop_background_listening(self):
+        """백그라운드 리스닝 중지"""
+        self._is_listening = False
+    
+    def listen_continuous(self, duration: float = 5.0, language: str = "ko-KR") -> Tuple[Optional[str], Optional[Any]]:
+        """
+        지정된 시간(초) 동안 연속으로 음성을 수집하고 인식
+        여러 문장을 한번에 모아서 대화 맥락을 파악할 수 있음
+        
+        Args:
+            duration: 음성 수집 시간 (초) - 기본값 5초
+            language: 인식 언어
+        
+        Returns:
+            (인식된 전체 텍스트 또는 None, AudioData 또는 None)
+        """
+        import time
+        try:
+            with self.microphone as source:
+                # 음성 감지 및 수집 (최대 duration 초)
+                audio = self.recognizer.listen(
+                    source,
+                    timeout=None,  # 음성이 들어올 때까지 무한 대기
+                    phrase_time_limit=duration  # 최대 duration초까지 수집
+                )
+                
+                # 오디오 길이 확인
+                audio_data = audio.get_raw_data()
+                duration_actual = len(audio_data) / (audio.sample_rate * audio.sample_width)
+                
+                if duration_actual < 0.5:  # 0.5초 미만이면 무시
+                    return None, None
+                
+                # 텍스트 인식
+                try:
+                    text = self.recognizer.recognize_google(audio, language=language)
+                    return text, audio
+                except sr.UnknownValueError:
+                    return None, None
+                except sr.RequestError as e:
+                    print(f"❌ 음성 인식 API 오류: {e}")
+                    return None, None
+        
+        except sr.WaitTimeoutError:
+            return None, None
+        except Exception as e:
+            return None, None
         """
         음성이 감지될 때까지 대기
         
@@ -979,22 +1125,27 @@ class SpeechDetector:
         """
         try:
             with self.microphone as source:
-                print("👂 음성 대기 중...")
                 audio = self.recognizer.listen(
                     source, 
                     timeout=timeout, 
                     phrase_time_limit=phrase_time_limit
                 )
-                print("✅ 음성 감지됨!")
+                
+                # 오디오 길이 확인 (너무 짧으면 노이즈로 판단)
+                audio_data = audio.get_raw_data()
+                duration = len(audio_data) / (audio.sample_rate * audio.sample_width)
+                
+                if duration < 0.5:  # 0.5초 미만이면 노이즈로 판단
+                    return None, False
+                
                 return audio, True
         
         except sr.WaitTimeoutError:
             return None, False
         except Exception as e:
-            print(f"❌ 음성 감지 오류: {e}")
             return None, False
     
-    def recognize_speech(self, audio: sr.AudioData, language: str = "ko-KR") -> Optional[str]:
+    def recognize_speech(self, audio: Any, language: str = "ko-KR") -> Optional[str]:
         """
         음성을 텍스트로 변환 (Google Speech Recognition)
         
@@ -1007,16 +1158,13 @@ class SpeechDetector:
         """
         try:
             text = self.recognizer.recognize_google(audio, language=language)
-            print(f"📝 인식된 텍스트: {text}")
             return text
         except sr.UnknownValueError:
-            print("⚠️  음성을 인식할 수 없습니다")
             return None
         except sr.RequestError as e:
-            print(f"❌ 음성 인식 API 오류: {e}")
             return None
     
-    def save_audio_to_wav(self, audio: sr.AudioData, output_path: str) -> str:
+    def save_audio_to_wav(self, audio: Any, output_path: str) -> str:
         """
         AudioData를 WAV 파일로 저장
         
@@ -1043,7 +1191,9 @@ class IntegratedMultimodalSystem:
         camera_id: int = 0,
         model: str = "gpt-4o-mini",
         downsampling_config: DownsamplingConfig = None,
-        log_dir: str = None
+        log_dir: str = None,
+        energy_threshold: int = 400,
+        dynamic_threshold: bool = False
     ):
         """
         통합 멀티모달 시스템 초기화
@@ -1053,29 +1203,33 @@ class IntegratedMultimodalSystem:
             model: OpenAI 모델명
             downsampling_config: 다운샘플링 설정
             log_dir: 로그 저장 디렉토리
+            energy_threshold: 음성 감지 에너지 임계값 (낮을수록 민감함)
+            dynamic_threshold: 동적 에너지 임계값 여부 (False=고정/스피커소리용, True=자동/마이크용)
         """
         self.camera_id = camera_id
         self.model = model
         self.downsampling_config = downsampling_config or DownsamplingConfig()
         
+        # 분석 설정 로드
+        self.analysis_config = get_config('analysis', default={}) or {}
+        self.use_voice_characteristics = self.analysis_config.get('voice_characteristics', True)
+        
         # 컴포넌트 초기화
         self.video_manager = VideoCaptureManager(camera_id)
         self.downsampler = VideoDownsampler(self.downsampling_config)
-        self.speech_detector = SpeechDetector()
+        self.speech_detector = SpeechDetector(energy_threshold=energy_threshold, dynamic_threshold=dynamic_threshold)
         
         # 멀티모달 분석기
         if MULTIMODAL_ANALYZER_AVAILABLE:
             self.multimodal_analyzer = MultimodalAnalyzer(model=model)
         else:
             self.multimodal_analyzer = None
-            print("⚠️  멀티모달 분석기를 사용할 수 없습니다")
         
-        # 음성 특성 분석기
-        if VOICE_CHARACTERISTICS_AVAILABLE:
+        # 음성 특성 분석기 (config에서 비활성화 가능)
+        if VOICE_CHARACTERISTICS_AVAILABLE and self.use_voice_characteristics:
             self.voice_characteristics_analyzer = VoiceCharacteristicsAnalyzer()
         else:
             self.voice_characteristics_analyzer = None
-            print("⚠️  음성 특성 분석기를 사용할 수 없습니다")
         
         # 모니터링 상태
         self.is_monitoring = False
@@ -1092,7 +1246,27 @@ class IntegratedMultimodalSystem:
         # 콜백 함수
         self.on_result_callback: Optional[Callable[[Dict], None]] = None
         
-        print("✅ 통합 멀티모달 시스템 초기화 완료")
+        # 디스플레이 설정
+        self.use_opencv_display = False
+        self.opencv_display = None
+        self.use_web_dashboard = False
+    
+    # ==================== 디스플레이 설정 메서드 ====================
+    
+    def enable_opencv_display(self, enable: bool = True):
+        """OpenCV 실시간 디스플레이 활성화/비활성화"""
+        self.use_opencv_display = enable
+        if enable:
+            try:
+                from core.display_manager import OpenCVDisplay
+                self.opencv_display = OpenCVDisplay()
+            except ImportError:
+                print("⚠️ OpenCV 디스플레이를 로드할 수 없습니다")
+                self.use_opencv_display = False
+    
+    def enable_web_dashboard(self, enable: bool = True):
+        """웹 대시보드 연동 활성화/비활성화"""
+        self.use_web_dashboard = enable
     
     # ==================== 비디오 소스 설정 메서드 ====================
     
@@ -1114,7 +1288,6 @@ class IntegratedMultimodalSystem:
         """
         source = WebcamVideoSource(camera_id)
         self.video_manager.set_source(source)
-        print(f"📹 비디오 소스: 웹캠 (ID: {camera_id})")
     
     def use_file(self, file_path: str):
         """
@@ -1125,7 +1298,6 @@ class IntegratedMultimodalSystem:
         """
         source = FileVideoSource(file_path)
         self.video_manager.set_source(source)
-        print(f"📹 비디오 소스: 파일 ({file_path})")
     
     def use_network_camera(self, url: str):
         """
@@ -1138,7 +1310,6 @@ class IntegratedMultimodalSystem:
         """
         source = NetworkVideoSource(url)
         self.video_manager.set_source(source)
-        print(f"📹 비디오 소스: 네트워크 카메라 ({url})")
     
     def use_testset(self, folder_path: str, loop: bool = True):
         """
@@ -1150,7 +1321,6 @@ class IntegratedMultimodalSystem:
         """
         source = TestsetVideoSource(folder_path, loop)
         self.video_manager.set_source(source)
-        print(f"📹 비디오 소스: 테스트셋 ({folder_path})")
     
     def get_testset_files(self) -> List[str]:
         """테스트셋의 파일 목록 반환"""
@@ -1168,7 +1338,6 @@ class IntegratedMultimodalSystem:
         """
         source = self.video_manager.get_source()
         if not isinstance(source, TestsetVideoSource):
-            print("❌ 현재 테스트셋 모드가 아닙니다")
             return False
         
         if isinstance(index_or_name, int):
@@ -1211,17 +1380,42 @@ class IntegratedMultimodalSystem:
                 result["error"] = "비디오 소스를 열 수 없습니다"
                 return result
             
-            print("\n" + "=" * 60)
-            print("🎬 영상만 분석 모드 (테스트용)")
-            print("=" * 60)
+            # 2. 소스 타입에 따라 프레임 가져오기
+            source = self.video_manager.get_source()
             
-            # 2. 영상 캡처
-            print("\n📹 영상 캡처 중...")
-            frames, timestamps = self._capture_and_process_video()
+            # 이미지 파일인 경우 단일 프레임만 가져옴
+            if isinstance(source, FileVideoSource) and source.is_image:
+                frame = source.capture_frame()
+                if frame is not None:
+                    frames = [frame]
+                    timestamps = [0.0]
+                else:
+                    result["error"] = "이미지를 읽을 수 없습니다"
+                    return result
+            # 테스트셋의 현재 파일이 이미지인 경우
+            elif isinstance(source, TestsetVideoSource):
+                current_src = source.current_source
+                if current_src and current_src.is_image:
+                    frame = current_src.capture_frame()
+                    if frame is not None:
+                        frames = [frame]
+                        timestamps = [0.0]
+                    else:
+                        result["error"] = "이미지를 읽을 수 없습니다"
+                        return result
+                else:
+                    # 비디오인 경우 캡처
+                    frames, timestamps = self._capture_and_process_video()
+            else:
+                # 웹캠/네트워크 등 비디오 소스
+                frames, timestamps = self._capture_and_process_video()
             
             if not frames:
-                result["error"] = "프레임을 캡처할 수 없습니다"
+                result["error"] = "프레임을 가져올 수 없습니다"
                 return result
+            
+            # 이미지 다운샘플링 적용
+            frames = [self.downsampler.downsample_image(f) for f in frames]
             
             result["video_analysis"] = {
                 "frame_count": len(frames),
@@ -1230,14 +1424,10 @@ class IntegratedMultimodalSystem:
             
             # 3. 멀티모달 분석 (영상 + 텍스트 입력)
             if self.multimodal_analyzer and frames:
-                print("\n🔍 영상 분석 수행 중...")
-                
                 # 대표 프레임 선택 (중간 프레임)
                 representative_frame = frames[len(frames) // 2]
                 
                 # 분석할 텍스트 (기본값: 영상 분석 요청)
-                # 기존 시스템 프롬프트는 "음성 입력"을 기대하므로, 
-                # 테스트 모드에서는 상황 설명 요청으로 대체
                 default_text = "현재 상황을 분석해 주세요. 위험하거나 긴급한 상황인지 판단해 주세요."
                 analysis_text = text_input or default_text
                 
@@ -1258,7 +1448,6 @@ class IntegratedMultimodalSystem:
         
         except Exception as e:
             result["error"] = str(e)
-            print(f"❌ 분석 오류: {e}")
             return result
     
     def analyze_testset_all(self, text_input: str = None) -> List[Dict[str, Any]]:
@@ -1273,22 +1462,14 @@ class IntegratedMultimodalSystem:
         """
         source = self.video_manager.get_source()
         if not isinstance(source, TestsetVideoSource):
-            print("❌ 현재 테스트셋 모드가 아닙니다. use_testset()을 먼저 호출하세요.")
             return []
         
         results = []
         files = source.list_files()
         
-        print(f"\n📁 테스트셋 전체 분석 시작 ({len(files)}개 파일)")
-        print("=" * 60)
-        
         for i, filename in enumerate(files):
-            print(f"\n[{i+1}/{len(files)}] 📂 {filename}")
-            print("-" * 40)
-            
             # 파일 선택
             if not source.select_file(i):
-                print(f"   ❌ 파일 열기 실패")
                 continue
             
             # 분석
@@ -1297,21 +1478,6 @@ class IntegratedMultimodalSystem:
             result["filename"] = filename
             
             results.append(result)
-            
-            # 결과 요약
-            if result.get("success"):
-                analysis = result.get("multimodal_analysis", {})
-                print(f"   ✅ 성공")
-                print(f"      상황: {analysis.get('situation_type', 'N/A')}")
-                print(f"      위급도: {analysis.get('urgency', 'N/A')}")
-                print(f"      우선순위: {analysis.get('priority', 'N/A')}")
-            else:
-                print(f"   ❌ 실패: {result.get('error', '알 수 없는 오류')}")
-        
-        print("\n" + "=" * 60)
-        print(f"📊 테스트셋 분석 완료")
-        print(f"   총 {len(files)}개 파일, 성공 {sum(1 for r in results if r.get('success'))}개")
-        print("=" * 60)
         
         return results
     
@@ -1340,140 +1506,111 @@ class IntegratedMultimodalSystem:
         }
         
         try:
-            # 1. 카메라 열기 (백그라운드에서 대기)
+            # 1. 카메라 미리 열어두기
             if not self.video_manager.open():
                 result["error"] = "카메라를 열 수 없습니다"
                 return result
             
-            # 2. 음성 감지 대기 (음성 감지 전까지는 음성만 대기)
-            print("\n" + "=" * 60)
-            print("🎙️  음성 감지 대기 중... (말씀해 주세요)")
-            print("=" * 60)
-            
-            audio, detected = self.speech_detector.listen_for_speech(
+            # 2. 음성 듣고 인식 (문장이 완성될 때까지 대기)
+            #    텍스트가 인식되면 그 순간 반환
+            transcribed_text, audio = self.speech_detector.listen_and_recognize(
                 phrase_time_limit=phrase_time_limit
             )
             
-            if not detected or audio is None:
-                result["error"] = "음성이 감지되지 않았습니다"
+            # 텍스트가 인식되지 않으면 다음 루프로
+            if not transcribed_text:
                 return result
             
             result["speech_detected"] = True
+            result["transcribed_text"] = transcribed_text
             
-            # 3. 음성 감지됨! 동시에 영상 캡처 시작
-            print("\n🚀 음성 감지! 멀티모달 분석 시작...")
+            # 3. 문장이 인식됨! 이 순간 영상 캡처
+            print(f"🎤 \"{transcribed_text}\"")
+            print("📸 영상 캡처 중...")
             
-            # ThreadPoolExecutor로 병렬 처리
-            with ThreadPoolExecutor(max_workers=3) as executor:
-                futures = {}
-                
-                # 3-1. 음성 인식 (텍스트 변환)
-                futures["speech_recognition"] = executor.submit(
-                    self.speech_detector.recognize_speech, 
-                    audio
+            # 현재 프레임 캡처 (이미지 1장)
+            frame = self.video_manager.capture_frame()
+            if frame is not None:
+                frame = self.downsampler.downsample_image(frame)
+                video_frames = [frame]
+                result["video_analysis"] = {"frame_count": 1}
+            else:
+                video_frames = []
+            
+            # 4. 음성 특성 분석 (병렬 처리 가능)
+            audio_path = None
+            voice_features = None
+            
+            if audio and self.voice_characteristics_analyzer:
+                import tempfile
+                temp_audio_file = tempfile.NamedTemporaryFile(
+                    suffix='.wav', 
+                    dir=self.recordings_dir, 
+                    delete=False,
+                    prefix='temp_audio_'
                 )
-                
-                # 3-2. 음성 특성 분석 (오디오 파일 저장 후 분석)
-                audio_path = self.recordings_dir / f"audio_{datetime.now().strftime('%Y%m%d_%H%M%S')}.wav"
+                audio_path = Path(temp_audio_file.name)
+                temp_audio_file.close()
                 self.speech_detector.save_audio_to_wav(audio, str(audio_path))
                 
-                if self.voice_characteristics_analyzer:
-                    futures["voice_characteristics"] = executor.submit(
-                        self._analyze_voice_characteristics,
-                        str(audio_path)
-                    )
+                voice_features = self._analyze_voice_characteristics(str(audio_path))
+                result["voice_characteristics"] = voice_features
+            
+            # 5. 멀티모달 분석 (음성 텍스트 + 영상)
+            if transcribed_text and video_frames and self.multimodal_analyzer:
+                print("🔍 멀티모달 분석 중...")
                 
-                # 3-3. 영상 캡처 및 다운샘플링
-                futures["video_capture"] = executor.submit(
-                    self._capture_and_process_video
+                representative_frame = video_frames[0]
+                
+                # 음성 특성 정보를 추가 컨텍스트로 전달
+                additional_context = None
+                if voice_features:
+                    additional_context = self._format_voice_features_context(voice_features)
+                
+                multimodal_result = self.multimodal_analyzer.analyze_with_image(
+                    audio_text=transcribed_text,
+                    image_source=representative_frame,
+                    additional_context=additional_context,
+                    audio_file_path=str(audio_path) if audio_path else None
                 )
                 
-                # 결과 수집
-                transcribed_text = None
-                voice_features = None
-                video_frames = []
-                
-                for name, future in futures.items():
-                    try:
-                        if name == "speech_recognition":
-                            transcribed_text = future.result(timeout=30)
-                            result["transcribed_text"] = transcribed_text
-                        
-                        elif name == "voice_characteristics":
-                            voice_features = future.result(timeout=30)
-                            result["voice_characteristics"] = voice_features
-                        
-                        elif name == "video_capture":
-                            video_frames, timestamps = future.result(timeout=30)
-                            result["video_analysis"] = {
-                                "frame_count": len(video_frames),
-                                "timestamps": timestamps
-                            }
-                    
-                    except Exception as e:
-                        print(f"   ⚠️  {name} 오류: {e}")
+                result["multimodal_analysis"] = multimodal_result
             
-            # 4. 멀티모달 분석 (음성 텍스트 + 영상)
-            if transcribed_text and video_frames and self.multimodal_analyzer:
-                print("\n🔍 멀티모달 분석 수행 중...")
-                
-                # 대표 프레임 선택 (중간 프레임)
-                representative_frame = video_frames[len(video_frames) // 2] if video_frames else None
-                
-                if representative_frame is not None:
-                    # 음성 특성 정보를 추가 컨텍스트로 전달
-                    additional_context = None
-                    if voice_features:
-                        additional_context = self._format_voice_features_context(voice_features)
-                    
-                    multimodal_result = self.multimodal_analyzer.analyze_with_image(
-                        audio_text=transcribed_text,
-                        image_source=representative_frame,
-                        additional_context=additional_context,
-                        audio_file_path=str(audio_path)
-                    )
-                    
-                    result["multimodal_analysis"] = multimodal_result
-            
-            # 5. 성공 표시
+            # 6. 성공 표시
             result["success"] = True
             
-            # 6. 결과 로그 저장
+            # 7. 결과 로그 저장
             self._save_result_log(result)
             
-            # 7. 임시 오디오 파일 삭제 (선택적)
-            # os.remove(audio_path)
+            # 8. 임시 오디오 파일 삭제
+            if audio_path and audio_path.exists():
+                try:
+                    audio_path.unlink()
+                except:
+                    pass
             
             return result
         
         except Exception as e:
             result["error"] = str(e)
-            print(f"❌ 분석 오류: {e}")
             return result
-        
-        finally:
-            # 카메라 닫지 않음 (연속 모니터링을 위해)
-            pass
     
     def _analyze_voice_characteristics(self, audio_path: str) -> Dict[str, Any]:
         """음성 특성 분석"""
-        print("   🎤 음성 특성 분석 중...")
-        
         try:
             features = self.voice_characteristics_analyzer.extract_features(audio_path)
             
             # 긴급도 점수 계산
             emergency_indicators = self._calculate_voice_emergency_indicators(features)
             
-            print("   ✅ 음성 특성 분석 완료")
-            
             return {
                 "features": features,
                 "emergency_indicators": emergency_indicators
             }
-        
         except Exception as e:
-            print(f"   ⚠️  음성 특성 분석 실패: {e}")
+            print(f"❌ 음성 특성 분석 오류: {e}")
+            return None
+        except Exception as e:
             return None
     
     def _calculate_voice_emergency_indicators(self, features: Dict) -> Dict[str, Any]:
@@ -1489,28 +1626,63 @@ class IntegratedMultimodalSystem:
         if not features:
             return indicators
         
+        # voice_analysis 설정에서 임계값 읽기
+        # self.config는 초기화 시 get_config로 받은 값
+        analysis_cfg = self.analysis_config  # 이미 저장된 config
+        voice_cfg = analysis_cfg.get('voice_analysis', {}) or {}
+        
+        pitch_cfg = voice_cfg.get('pitch', {})
+        energy_cfg = voice_cfg.get('energy', {})
+        speech_rate_cfg = voice_cfg.get('speech_rate', {})
+        
+        # config에서 임계값 로드 (없으면 기본값 사용)
+        high_pitch_threshold = pitch_cfg.get('high_threshold', 180)
+        pitch_variability_threshold = pitch_cfg.get('variability_threshold', 40)
+        high_energy_threshold = energy_cfg.get('high_threshold', 0.05)
+        fast_speech_threshold = speech_rate_cfg.get('fast_threshold', 7)
+        
         score = 0.0
+        
+        # 디버그: 분석된 특성 출력
+        print("\n🔍 음성 특성 분석 상세:")
+        print(f"  - Pitch: {features.get('pitch', {})}")
+        print(f"  - Energy: {features.get('energy', {})}")
+        print(f"  - Speech Rate: {features.get('speech_rate', {})}")
         
         # 피치 분석 (높은 피치 = 긴장/공포)
         pitch = features.get("pitch", {})
-        if pitch.get("mean", 0) > 250:  # 평균 피치가 높으면
-            indicators["high_pitch"] = True
-            score += 0.25
-        if pitch.get("std", 0) > 50:  # 피치 변동이 크면 (떨림)
-            indicators["voice_trembling"] = True
-            score += 0.25
+        if isinstance(pitch, dict):
+            pitch_mean = pitch.get("mean", 0)
+            pitch_std = pitch.get("std", 0)
+            print(f"  → Pitch Mean: {pitch_mean:.1f} (threshold: {high_pitch_threshold})")
+            print(f"  → Pitch Std: {pitch_std:.1f} (threshold: {pitch_variability_threshold})")
+            
+            if pitch_mean > high_pitch_threshold:
+                indicators["high_pitch"] = True
+                score += 0.25
+            if pitch_std > pitch_variability_threshold:  # 피치 변동이 크면 (떨림)
+                indicators["voice_trembling"] = True
+                score += 0.25
         
         # 에너지 분석 (높은 에너지 = 소리 지름)
         energy = features.get("energy", {})
-        if energy.get("max", 0) > 0.3:  # 최대 에너지가 높으면
-            indicators["high_energy"] = True
-            score += 0.25
+        if isinstance(energy, dict):
+            energy_max = energy.get("max", 0)
+            print(f"  → Energy Max: {energy_max:.3f} (threshold: {high_energy_threshold})")
+            if energy_max > high_energy_threshold:
+                indicators["high_energy"] = True
+                score += 0.25
         
         # 말 속도 분석 (빠른 말 = 급박함)
         speech_rate = features.get("speech_rate", {})
-        if speech_rate.get("estimated_syllables_per_second", 0) > 5:  # 초당 5음절 이상
-            indicators["fast_speech"] = True
-            score += 0.25
+        if isinstance(speech_rate, dict):
+            syllables_per_sec = speech_rate.get("estimated_syllables_per_second", 0)
+            print(f"  → Speech Rate: {syllables_per_sec:.2f} syllables/sec (threshold: {fast_speech_threshold})")
+            if syllables_per_sec > fast_speech_threshold:
+                indicators["fast_speech"] = True
+                score += 0.25
+        
+        print(f"  → 결과: {indicators}")
         
         indicators["overall_score"] = min(score, 1.0)
         
@@ -1518,8 +1690,6 @@ class IntegratedMultimodalSystem:
     
     def _capture_and_process_video(self) -> Tuple[List[np.ndarray], List[float]]:
         """비디오 캡처 및 다운샘플링"""
-        print("   📹 비디오 캡처 중...")
-        
         # 비디오 세그먼트 캡처
         frames, timestamps = self.video_manager.capture_video_segment(
             duration=self.downsampling_config.video_capture_duration,
@@ -1529,33 +1699,64 @@ class IntegratedMultimodalSystem:
         # 다운샘플링 적용
         frames, timestamps = self.downsampler.downsample_video_frames(frames, timestamps)
         
-        print(f"   ✅ 비디오 처리 완료 ({len(frames)} 프레임, 다운샘플링 적용)")
-        
         return frames, timestamps
     
     def _format_voice_features_context(self, voice_features: Dict) -> str:
-        """음성 특성을 컨텍스트 문자열로 포맷"""
+        """음성 특성을 LLM 분석용 컨텍스트로 포맷"""
         if not voice_features:
             return ""
         
         indicators = voice_features.get("emergency_indicators", {})
+        features = voice_features.get("features", {})
         
         context_parts = ["**음성 특성 분석 결과:**"]
         
+        # Raw 특성값 출력 (LLM이 더 정확하게 판단하도록)
+        pitch = features.get("pitch", {})
+        if isinstance(pitch, dict):
+            pitch_mean = pitch.get("mean", 0)
+            pitch_std = pitch.get("std", 0)
+            context_parts.append(f"**피치(음높이):** 평균 {pitch_mean:.1f}Hz, 변동 {pitch_std:.1f}Hz")
+        
+        energy = features.get("energy", {})
+        if isinstance(energy, dict):
+            energy_max = energy.get("max", 0)
+            energy_mean = energy.get("mean", 0)
+            context_parts.append(f"**에너지(음량):** 최대 {energy_max:.3f}, 평균 {energy_mean:.3f}")
+        
+        speech_rate = features.get("speech_rate", {})
+        if isinstance(speech_rate, dict):
+            syllables_per_sec = speech_rate.get("estimated_syllables_per_second", 0)
+            context_parts.append(f"**말 속도:** {syllables_per_sec:.2f} 음절/초")
+        
+        # 구체적인 특성 설명
+        context_parts.append("\n**특성 분석:**")
+        
         if indicators.get("high_pitch"):
-            context_parts.append("- 높은 피치 감지 (긴장/공포 가능성)")
+            context_parts.append("- 높은 피치 감지 → 긴장/공포 가능성")
         
         if indicators.get("high_energy"):
-            context_parts.append("- 높은 에너지 감지 (소리 지름/흥분)")
+            context_parts.append("- 높은 음성 에너지 → 소리 지름/강한 감정 표출")
         
         if indicators.get("fast_speech"):
-            context_parts.append("- 빠른 말 속도 (급박함)")
+            context_parts.append("- 빠른 말 속도 → 급박한 상황/불안정 심리")
         
         if indicators.get("voice_trembling"):
-            context_parts.append("- 음성 떨림 감지 (불안/공포)")
+            context_parts.append("- 음성 떨림 감지 → 두려움/극심한 스트레스")
         
+        # 특성이 없으면 안정적 상태로 기술
+        if not any([indicators.get("high_pitch"), indicators.get("high_energy"), 
+                    indicators.get("fast_speech"), indicators.get("voice_trembling")]):
+            context_parts.append("- 음성이 안정적이고 진정된 상태")
+        
+        # 전반적 평가 (점수 대신 설명)
         score = indicators.get("overall_score", 0)
-        context_parts.append(f"- 음성 긴급도 점수: {score:.0%}")
+        if score > 0.7:
+            context_parts.append("\n→ 종합 평가: 매우 절박하고 긴장된 상태")
+        elif score > 0.4:
+            context_parts.append("\n→ 종합 평가: 부분적인 긴장 또는 스트레스 신호")
+        else:
+            context_parts.append("\n→ 종합 평가: 음성 특성상 특별한 긴급 신호 없음")
         
         return "\n".join(context_parts)
     
@@ -1569,8 +1770,6 @@ class IntegratedMultimodalSystem:
         
         with open(log_file, 'w', encoding='utf-8') as f:
             json.dump(serializable_result, f, ensure_ascii=False, indent=2)
-        
-        print(f"💾 로그 저장: {log_file}")
     
     def _make_serializable(self, obj):
         """객체를 JSON 직렬화 가능하게 변환"""
@@ -1590,7 +1789,8 @@ class IntegratedMultimodalSystem:
     def start_monitoring(
         self, 
         on_result: Callable[[Dict], None] = None,
-        max_iterations: int = None
+        max_iterations: int = None,
+        verbose: bool = False
     ):
         """
         연속 모니터링 시작
@@ -1598,84 +1798,278 @@ class IntegratedMultimodalSystem:
         Args:
             on_result: 결과 콜백 함수
             max_iterations: 최대 반복 횟수 (None이면 무한)
+            verbose: 상세 출력 여부
         """
         self.on_result_callback = on_result
         self.is_monitoring = True
+        self.verbose = verbose
         
         # 카메라 미리 열기
         self.video_manager.open()
         
-        print("\n" + "=" * 60)
-        print("🔄 연속 모니터링 시작")
-        print("   - 음성이 감지되면 자동으로 영상 분석")
-        print("   - Ctrl+C로 종료")
-        print("=" * 60)
+        # OpenCV 디스플레이 시작 (설정된 경우)
+        if self.use_opencv_display and self.opencv_display:
+            self.opencv_display.start()
+        
+        # 웹 대시보드 연동 확인
+        try:
+            from web.app import dashboard, enable_video_stream
+            if dashboard.running:
+                self.use_web_dashboard = True
+                print("   📡 웹 대시보드 연동 활성화")
+                
+                # 웹 비디오 스트리밍 비활성화 (localhost 접근 거부 이슈)
+                enable_video_stream(False)
+                self.web_video_streaming = False
+        except:
+            self.web_video_streaming = False
+        
+        self._start_monitoring_sequential(max_iterations)
+    
+    
+    def _start_monitoring_sequential(self, max_iterations: int = None):
+        """순차 모니터링: 백그라운드 음성 감지 방식"""
+        print("\n🔄 모니터링 시작 (Ctrl+C로 종료)")
+        print("   💡 백그라운드 음성 감지 중... 아무거나 말씀하세요!")
         
         iteration = 0
         
+        # 백그라운드 음성 감지 시작
+        self.speech_detector.start_background_listening()
+        
         try:
             while self.is_monitoring:
-                iteration += 1
-                
-                if max_iterations and iteration > max_iterations:
-                    print(f"\n✅ {max_iterations}회 완료!")
+                if max_iterations and iteration >= max_iterations:
+                    print(f"\n✅ {max_iterations}회 분석 완료!")
                     break
                 
-                print(f"\n[{iteration}회차] {datetime.now().strftime('%H:%M:%S')}")
+                # 비블로킹 - 감지된 음성이 있는지 확인
+                transcribed_text, audio = self.speech_detector.get_recognized_speech()
                 
-                # 분석 수행
-                result = self.analyze_once()
+                if transcribed_text:
+                    print("📸 영상 캡처 중...")
+                    
+                    # 현재 프레임 캡처
+                    frame = self.video_manager.capture_frame()
+                    if frame is not None:
+                        frame = self.downsampler.downsample_image(frame)
+                    
+                    # 분석 수행
+                    result = self._analyze_with_data(transcribed_text, audio, frame)
+                    
+                    # 분석 결과 처리
+                    if result.get("success"):
+                        iteration += 1
+                        
+                        # 콜백 호출
+                        if self.on_result_callback:
+                            self.on_result_callback(result)
+                        
+                        # 결과 출력
+                        self._print_result_summary(result, verbose=self.verbose)
                 
-                # 콜백 호출
-                if self.on_result_callback and result.get("success"):
-                    self.on_result_callback(result)
+                # 메인 스레드에서 OpenCV 렌더링 처리 (필수: 메인 스레드만 가능)
+                if self.opencv_display and self.opencv_display.is_running():
+                    if not self.opencv_display.render():
+                        self.is_monitoring = False
+                        break
                 
-                # 결과 출력
-                self._print_result_summary(result)
+                time.sleep(0.01)  # 이벤트 루프 속도 제어
         
         except KeyboardInterrupt:
-            print("\n\n⏹️  모니터링 중지됨 (Ctrl+C)")
+            print("\n⏹️  모니터링 중지됨")
         
         finally:
+            # 백그라운드 리스닝 중지
+            self.speech_detector.stop_background_listening()
             self.stop_monitoring()
+    
+    def _analyze_with_data(self, transcribed_text: str, audio: Any, frame: np.ndarray) -> Dict[str, Any]:
+        """이미 캡처된 데이터로 분석 수행"""
+        result = {
+            "timestamp": datetime.now().isoformat(),
+            "success": False,
+            "speech_detected": True,
+            "transcribed_text": transcribed_text,
+            "voice_characteristics": None,
+            "video_analysis": None,
+            "multimodal_analysis": None,
+            "error": None
+        }
+        
+        try:
+            video_frames = [frame] if frame is not None else []
+            result["video_analysis"] = {"frame_count": len(video_frames)}
+            
+            # 음성 특성 분석
+            audio_path = None
+            voice_features = None
+            
+            if audio:
+                if self.voice_characteristics_analyzer:
+                    import tempfile
+                    temp_audio_file = tempfile.NamedTemporaryFile(
+                        suffix='.wav', 
+                        dir=self.recordings_dir, 
+                        delete=False,
+                        prefix='temp_audio_'
+                    )
+                    audio_path = Path(temp_audio_file.name)
+                    temp_audio_file.close()
+                    self.speech_detector.save_audio_to_wav(audio, str(audio_path))
+                    
+                    voice_features = self._analyze_voice_characteristics(str(audio_path))
+                    result["voice_characteristics"] = voice_features
+                    if voice_features:
+                        print("✅ 음성 특성 분석 완료")
+                else:
+                    print("⚠️  음성 특성 분석기 비활성화")
+            else:
+                print("⚠️  오디오 데이터 없음")
+            
+            # 멀티모달 분석
+            if transcribed_text and video_frames and self.multimodal_analyzer:
+                print("🔍 멀티모달 분석 중...")
+                
+                representative_frame = video_frames[0]
+                
+                additional_context = None
+                if voice_features:
+                    additional_context = self._format_voice_features_context(voice_features)
+                
+                multimodal_result = self.multimodal_analyzer.analyze_with_image(
+                    audio_text=transcribed_text,
+                    image_source=representative_frame,
+                    additional_context=additional_context,
+                    audio_file_path=str(audio_path) if audio_path else None
+                )
+                
+                result["multimodal_analysis"] = multimodal_result
+            
+            result["success"] = True
+            
+            # 로그 저장
+            self._save_result_log(result)
+            
+            # 임시 파일 삭제
+            if audio_path and audio_path.exists():
+                try:
+                    audio_path.unlink()
+                except:
+                    pass
+            
+            return result
+        
+        except Exception as e:
+            result["error"] = str(e)
+            return result
     
     def stop_monitoring(self):
         """모니터링 중지"""
         self.is_monitoring = False
         self.video_manager.close()
-        print("✅ 모니터링 종료")
+        
+        # OpenCV 디스플레이 정리
+        if self.opencv_display:
+            self.opencv_display.stop()
+        
+        # 웹 비디오 스트리밍 정리
+        if getattr(self, 'web_video_streaming', False):
+            try:
+                from web.app import enable_video_stream
+                enable_video_stream(False)
+            except:
+                pass
     
-    def _print_result_summary(self, result: Dict):
+    def _push_to_displays(self, result: Dict, frame=None):
+        """결과를 디스플레이들(웹, OpenCV)에 전송"""
+        # 웹 대시보드로 전송
+        if self.use_web_dashboard:
+            try:
+                from web.app import push_result
+                push_result(result)
+            except Exception as e:
+                pass  # 웹 대시보드 오류는 무시
+        
+        # OpenCV 디스플레이 업데이트
+        if self.opencv_display and self.opencv_display.is_running():
+            self.opencv_display.update_result(result)
+            if frame is not None:
+                self.opencv_display.update_frame(frame)
+    
+    def _print_result_summary(self, result: Dict, verbose: bool = False):
         """결과 요약 출력"""
-        print("\n" + "-" * 40)
         
         if not result.get("success"):
-            print(f"❌ 분석 실패: {result.get('error', '알 수 없는 오류')}")
             return
         
-        # 음성 텍스트
+        analysis = result.get("multimodal_analysis")
+        if not analysis:
+            return
+        
+        # 디스플레이로 결과 전송
+        self._push_to_displays(result, result.get("_frame"))
+        
+        # 긴급 신호 여부
+        is_emergency = analysis.get('is_emergency', False)
+        
+        # 헤더 색상 구분
+        if is_emergency:
+            print("\n" + "🚨" * 50)
+            print("🚨 ⚠️  ⚠️  ⚠️  ⚠️  ⚠️  ⚠️  ⚠️  ⚠️  ⚠️  ⚠️  ⚠️  ⚠️  ⚠️  ⚠️  ⚠️ 긴급 상황 감지! 🚨")
+            print("🚨" * 50)
+        else:
+            print("\n" + "=" * 50)
+            print("📊 분석 결과")
+            print("=" * 50)
+        
+        # 음성 입력
         text = result.get("transcribed_text", "")
         if text:
-            print(f"📝 음성: {text[:80]}{'...' if len(text) > 80 else ''}")
+            print(f"📝 음성 입력: \"{text}\"")
         
-        # 음성 특성
+        # 음성 특성 분석
         voice = result.get("voice_characteristics")
         if voice:
+            print("\n🎤 음성 특성 분석:")
             indicators = voice.get("emergency_indicators", {})
-            score = indicators.get("overall_score", 0)
-            print(f"🎤 음성 긴급도: {score:.0%}")
+            if indicators.get("high_pitch"):
+                print("   - 높은 피치 감지 (긴장/공포 가능성)")
+            if indicators.get("high_energy"):
+                print("   - 높은 에너지 감지 (소리 지름/흥분)")
+            if indicators.get("fast_speech"):
+                print("   - 빠른 말 속도 (급박함)")
+            if indicators.get("voice_trembling"):
+                print("   - 음성 떨림 감지 (불안/공포)")
         
-        # 멀티모달 분석
-        analysis = result.get("multimodal_analysis")
-        if analysis:
-            print(f"🔍 상황: {analysis.get('situation_type', 'N/A')}")
-            print(f"⚡ 위급도: {analysis.get('urgency', 'N/A')}")
-            print(f"🚨 우선순위: {analysis.get('priority', 'N/A')}")
-            
-            if analysis.get("is_emergency"):
-                print(f"⚠️  긴급 상황: {analysis.get('emergency_reason', '')}")
+        # 멀티모달 분석 결과
+        print("\n🔍 상황 분석:")
+        print(f"   - 상황 유형: {analysis.get('situation_type', 'N/A')}")
+        print(f"   - 상황 설명: {analysis.get('situation', 'N/A')}")
+        print(f"   - 감정 상태: {analysis.get('emotional_state', 'N/A')}")
+        print(f"   - 영상 내용: {analysis.get('visual_content', 'N/A')}")
         
-        print("-" * 40)
+        print("\n⚠️  긴급도 판단:")
+        if is_emergency:
+            print(f"   - 긴급 여부: 🚨 YES - 즉시 대응 필요!")
+        else:
+            print(f"   - 긴급 여부: ✅ 아니오")
+        print(f"   - 우선순위: {analysis.get('priority', 'N/A')}")
+        print(f"   - 긴급 판단 근거: {analysis.get('emergency_reason', 'N/A')}")
+        
+        print("\n🎯 음성-영상 일치도:")
+        print(f"   - 일치 여부: {analysis.get('audio_visual_consistency', 'N/A')}")
+        
+        print("\n💡 권장 조치:")
+        if is_emergency:
+            print(f"   - 🚨 긴급: {analysis.get('action', 'N/A')}")
+        else:
+            print(f"   - {analysis.get('action', 'N/A')}")
+        
+        if is_emergency:
+            print("🚨" * 50 + "\n")
+        else:
+            print("=" * 50 + "\n")
 
 
 # 테스트 및 실행
