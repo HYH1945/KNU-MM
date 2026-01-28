@@ -64,11 +64,36 @@ transcriptions/
 out/
 dist/
 
-# 환경 설정
+# 환경 설정 (절대 커밋 금지)
 .env
 .env.local
+.env.*
+!.env.example
+# 프로젝트 설정 내부의 추가 환경/비밀 파일 (절대 커밋 금지)
+config/.env
+config/*.env
+config/*.secret
+config/*.key
+config/*.pem
+
+# API 키가 포함될 수 있는 config (주의!)
+config/config.yaml
+!config/config.yaml.example
+
+# 웹캠/스크린샷 프레임
+webcam_frames/
+screenshots/
+
+# 테스트 아티팩트
+.pytest_cache/
+.coverage
+htmlcov/
+
+# 프로덕션 배포 파일
+*.pem
+*.key
+*.crt
 
 # 운영체제
 Thumbs.db
-
 .DS_Store
