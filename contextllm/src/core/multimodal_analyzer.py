@@ -73,15 +73,37 @@ class MultimodalAnalyzer:
     """멀티모달 컨텍스트 분석기 (오디오 + 비전)"""
     
     # 기본 시스템 프롬프트 (config가 없을 때 사용)
-    DEFAULT_SYSTEM_PROMPT = """당신은 음성과 이미지를 함께 분석하는 상황 분석 AI입니다. 객관적으로 상황을 파악하고 분석하세요.
+    DEFAULT_SYSTEM_PROMPT = """당신은 음성, 이미지, 음성 특성을 종합적으로 분석하는 상황 분석 AI입니다.
+
+분석 프로세스:
+1. 음성 특성 해석: 제공된 음성 분석 결과(피치, 에너지, 말 속도, 떨림)를 맥락 해석에 활용
+2. 음성 맥락 분석: 단순 키워드가 아닌 전체 의도와 감정 파악
+3. 영상 분석: 이미지에서 보이는 실제 상황, 환경, 신체 상태
+4. 일관성 평가: 음성 내용 + 음성 특성 + 영상이 일치하는가?
+5. 종합 판단: 모든 신호를 종합하여 긴급도 결정
+
+판단 원칙:
+- CRITICAL: 음성 특성이 절박함 + 음성 내용이 위험 상황 + 영상 일치 = 즉시 조치
+- HIGH: 부분적 절박함 + 위험 신호 있음 + 영상과 부분 일치 = 빠른 대응
+- MEDIUM: 음성 특성과 영상이 부분 일치 또는 불명확 = 모니터링
+- LOW: 음성 특성, 내용, 영상 모두 일상적 = 특별 조치 불필요
+
+핵심:
+- 음성 특성에서 "떨림", "빠른 속도", "높은 에너지"가 있으면 절박함의 신호
+- 영상에서 위험 징후(부상, 폭력, 위험 환경)가 보이면 신뢰도 증가
+- 음성-영상-특성이 모두 일치하면 긴급도 상향
 
 다음을 JSON으로만 반환하세요:
 {
-  "context": "맥락 설명",
-  "urgency": "위급도 (낮음/중간/높음/긴급)",
-  "situation": "상황 분석",
-  "situation_type": "상황 유형",
+  "context": "음성 맥락 분석",
+  "urgency": "위급도 (LOW/MEDIUM/HIGH/CRITICAL)",
+  "situation": "음성 내용 + 영상 + 음성 특성 종합 분석",
+  "situation_type": "상황 분류",
+  "emotional_state": "음성에서 감지되는 감정 상태",
+  "visual_content": "영상에서 보이는 실제 상황",
+  "audio_visual_consistency": "음성, 음성 특성, 영상의 일관성 평가",
   "is_emergency": true/false,
+  "emergency_reason": "긴급 판단 근거 (음성+특성+영상 기반)",
   "priority": "CRITICAL/HIGH/MEDIUM/LOW",
   "action": "권장 조치"
 }"""
@@ -110,8 +132,12 @@ class MultimodalAnalyzer:
         
         self.client = OpenAI(api_key=self.api_key)
         
-        # 음성 특성 분석기 초기화
-        if VOICE_ANALYSIS_AVAILABLE:
+        # 음성 특성 분석기 초기화 (config에서 설정 확인)
+        analysis_cfg = get_config('analysis', default={})
+        self.use_voice_characteristics = analysis_cfg.get('voice_characteristics', True)
+        self.use_streaming = analysis_cfg.get('streaming', False)
+        
+        if VOICE_ANALYSIS_AVAILABLE and self.use_voice_characteristics:
             self.voice_analyzer = VoiceCharacteristicsAnalyzer()
         else:
             self.voice_analyzer = None
@@ -207,45 +233,73 @@ class MultimodalAnalyzer:
             # 이미지를 base64로 인코딩
             base64_image = self.encode_image_to_base64(image_source)
             
-            # 사용자 메시지 구성
-            user_message = f"""**음성 입력:** "{audio_text}"
-
-**분석 요청:** 위 음성과 함께 제공된 이미지를 분석하여 전체 상황을 판단해주세요."""
+            # 사용자 메시지 구성 (음성 + 특성 + 영상)
+            user_message = f"""**1. 음성 입력:**
+"{audio_text}"
+"""
             
             if additional_context:
-                user_message += f"\n\n**추가 정보:** {additional_context}"
+                user_message += f"""
+**2. 음성 특성 분석 결과:**
+{additional_context}
+"""
+            else:
+                print("⚠️  음성 특성 분석 정보 없음")
             
-            # OpenAI API 호출 (Vision 지원)
-            response = self.client.chat.completions.create(
-                model=self.model,
-                messages=[
-                    {
-                        "role": "system",
-                        "content": self.system_prompt
-                    },
-                    {
-                        "role": "user",
-                        "content": [
-                            {
-                                "type": "text",
-                                "text": user_message
-                            },
-                            {
-                                "type": "image_url",
-                                "image_url": {
-                                    "url": f"data:image/jpeg;base64,{base64_image}",
-                                    "detail": self.image_detail  # config에서 로드
-                                }
+            user_message += f"""
+**3. 영상:**
+제공된 이미지를 분석하여 위 음성과 음성 특성과 함께 전체 상황을 판단해주세요.
+"""
+            
+            # 메시지 구성
+            messages = [
+                {
+                    "role": "system",
+                    "content": self.system_prompt
+                },
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": user_message
+                        },
+                        {
+                            "type": "image_url",
+                            "image_url": {
+                                "url": f"data:image/jpeg;base64,{base64_image}",
+                                "detail": self.image_detail
                             }
-                        ]
-                    }
-                ],
-                max_tokens=self.max_tokens,  # config에서 로드
-                temperature=self.temperature  # config에서 로드
-            )
+                        }
+                    ]
+                }
+            ]
             
-            # 응답 파싱
-            content = response.choices[0].message.content
+            # OpenAI API 호출 (스트리밍 또는 일반)
+            if self.use_streaming:
+                content = ""
+                print("   ", end="", flush=True)
+                response = self.client.chat.completions.create(
+                    model=self.model,
+                    messages=messages,
+                    max_tokens=self.max_tokens,
+                    temperature=self.temperature,
+                    stream=True
+                )
+                for chunk in response:
+                    if chunk.choices[0].delta.content:
+                        chunk_content = chunk.choices[0].delta.content
+                        content += chunk_content
+                        print("▓", end="", flush=True)  # 진행 표시
+                print(" ✓")  # 완료 표시
+            else:
+                response = self.client.chat.completions.create(
+                    model=self.model,
+                    messages=messages,
+                    max_tokens=self.max_tokens,
+                    temperature=self.temperature
+                )
+                content = response.choices[0].message.content
             
             # 안전 정책 거부 감지
             if content and ("I'm sorry" in content or "I can't assist" in content or "I cannot" in content):
@@ -289,52 +343,12 @@ class MultimodalAnalyzer:
                     'priority': 'LOW'
                 }
             
-            # 음성 특성 분석으로 신뢰도 검증
-            if audio_file_path and self.voice_analyzer:
-                try:
-                    print("   🎤 음성 특성 분석 중...")
-                    audio_features = self.voice_analyzer.extract_features(audio_file_path)
-                    
-                    confidence_result = self.voice_analyzer.calculate_confidence_score(
-                        audio_features=audio_features,
-                        llm_priority=result.get('priority', 'LOW'),
-                        llm_is_emergency=result.get('is_emergency', False)
-                    )
-                    
-                    # 최종 결과에 음성 분석 정보 추가
-                    result['voice_analysis'] = {
-                        'voice_emergency_score': confidence_result['voice_emergency_score'],
-                        'combined_score': confidence_result['combined_score'],
-                        'final_priority': confidence_result['final_priority'],
-                        'confidence': confidence_result['confidence'],
-                        'indicators': confidence_result['breakdown']['voice_indicators']
-                    }
-                    
-                    # 최종 우선순위 업데이트 (LLM + 음성 특성)
-                    original_priority = result.get('priority', 'LOW')
-                    final_priority = confidence_result['final_priority']
-                    
-                    if final_priority != original_priority:
-                        result['priority_adjustment'] = {
-                            'original': original_priority,
-                            'adjusted': final_priority,
-                            'reason': f'음성 특성 분석으로 인한 조정 (신뢰도: {confidence_result["confidence"]:.1%})'
-                        }
-                        result['priority'] = final_priority
-                        result['is_emergency'] = final_priority == 'CRITICAL'
-                    
-                    print(f"      ✅ 음성 분석 완료 (신뢰도: {confidence_result['confidence']:.1%})")
-                
-                except Exception as e:
-                    print(f"      ⚠️  음성 특성 분석 오류: {e}")
+            # LLM의 판단을 그대로 사용 (별도 조정 없음)
+            # LLM이 이미 음성 특성을 고려해서 판단했으므로 신뢰
+            if 'urgency' in result:
+                del result['urgency']
             
-            return {
-                    'error': 'JSON 파싱 실패',
-                    'raw_response': content,
-                    'context': '분석 오류',
-                    'is_emergency': False,
-                    'priority': 'LOW'
-                }
+            return result
         
         except Exception as e:
             print(f"❌ 멀티모달 분석 오류: {e}")
