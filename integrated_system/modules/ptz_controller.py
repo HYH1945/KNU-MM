@@ -17,12 +17,9 @@ from typing import Optional, Dict, Any
 from types import SimpleNamespace
 from enum import IntEnum
 
-from integrated_system.core.module_loader import DETECT_DIR, ensure_path
+from integrated_system.core.module_loader import DETECT_DIR, import_from_file
 
 logger = logging.getLogger(__name__)
-
-# ONVIF PTZ를 위해 Detaction_CCTV import 준비
-ensure_path(DETECT_DIR)
 
 
 class PTZPriority(IntEnum):
@@ -80,7 +77,9 @@ class UnifiedPTZController:
         원본 수정 시 즉시 반영됩니다.
         """
         try:
-            from services.ptz_controller import PTZCameraManager
+            import os
+            _ptz_mod = import_from_file("_orig_ptz_controller", os.path.join(DETECT_DIR, "services", "ptz_controller.py"))
+            PTZCameraManager = _ptz_mod.PTZCameraManager
 
             # PTZCameraManager는 AppConfig 객체를 파라미터로 받으므로 호환 객체 생성
             config_obj = SimpleNamespace(

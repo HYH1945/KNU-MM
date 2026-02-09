@@ -23,13 +23,10 @@ import numpy as np
 
 from integrated_system.core.base_module import BaseModule
 from integrated_system.core.event_bus import EventBus, Event
-from integrated_system.core.module_loader import DETECT_DIR, ensure_path
+from integrated_system.core.module_loader import DETECT_DIR, import_from_file
 from integrated_system.modules.ptz_controller import UnifiedPTZController, PTZPriority
 
 logger = logging.getLogger(__name__)
-
-# Detaction_CCTV를 sys.path에 추가하여 services/ import 가능하게
-ensure_path(DETECT_DIR)
 
 
 class YOLODetectionModule(BaseModule):
@@ -86,10 +83,13 @@ class YOLODetectionModule(BaseModule):
         try:
             os.environ['KMP_DUPLICATE_LIB_OK'] = 'True'
 
-            # ★ 원본 모듈 직접 import ★
-            from services.vision_processor import VisionProcessor
-            from services.priority_manager import VisualPriorityManager
-            from services.reid_manager import ReIDManager
+            # ★ 원본 모듈 직접 파일 로드 (services/__init__.py의 onvif 의존성 우회) ★
+            _vp = import_from_file("_orig_vision_processor", os.path.join(DETECT_DIR, "services", "vision_processor.py"))
+            _pm = import_from_file("_orig_priority_manager", os.path.join(DETECT_DIR, "services", "priority_manager.py"))
+            _rm = import_from_file("_orig_reid_manager", os.path.join(DETECT_DIR, "services", "reid_manager.py"))
+            VisionProcessor = _vp.VisionProcessor
+            VisualPriorityManager = _pm.VisualPriorityManager
+            ReIDManager = _rm.ReIDManager
 
             self._vision = VisionProcessor(self.model_path, self.confidence)
             self._priority_mgr = VisualPriorityManager()
@@ -220,7 +220,7 @@ class YOLODetectionModule(BaseModule):
 
         for obj in objects:
             is_target = target_id is not None and obj.get('permanent_id') == target_id
-            x1, y1, x2, y2 = obj['box']
+            x1, y1, x2, y2 = [int(v) for v in obj['box']]
             color = (0, 0, 255) if is_target else (0, 255, 255)
             thickness = 3 if is_target else 1
             cv2.rectangle(frame, (x1, y1), (x2, y2), color, thickness)

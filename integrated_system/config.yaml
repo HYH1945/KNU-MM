@@ -7,6 +7,7 @@
 # -----------------------------------------------------------
 camera:
   rtsp_url: 0                        # 0=웹캠, RTSP URL 또는 파일 경로 (env: RTSP_URL)
+  test_video: ""                     # 테스트 영상 경로 (설정 시 rtsp_url 대신 사용)
   ip: ""                            # 카메라 IP (env: CAMERA_IP)
   port: 80                          # 카메라 포트 (env: CAMERA_PORT)
   user: ""                          # 카메라 사용자 (env: CAMERA_USER)

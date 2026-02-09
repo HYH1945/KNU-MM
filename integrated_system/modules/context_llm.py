@@ -52,9 +52,8 @@ class ContextLLMModule(BaseModule):
     원본 파일을 수정하면 즉시 반영됩니다.
 
     분석 트리거:
-        1. YOLO 사람 감지 시 → 영상만 분석
-        2. STT 텍스트 수신 시 → 음성+영상 통합 분석
-        3. 사람 감지 + 음성 텍스트 → 최고 품질의 통합 분석
+        1. STT 텍스트 수신 시 → 해당 프레임을 캡처하여 음성+영상 통합 분석
+        (사람 감지만으로는 분석하지 않음 — 원본 contextllm과 동일한 동작)
     """
 
     ANALYSIS_COOLDOWN = 5.0  # 분석 쿨다운 (초)
@@ -197,13 +196,12 @@ class ContextLLMModule(BaseModule):
         """
         멀티모달 분석 실행
 
-        트리거 조건 (OR):
-            1. YOLO가 사람을 감지했을 때
-            2. STT에서 텍스트가 들어왔을 때 (30초 이내)
+        트리거 조건:
+            - STT에서 텍스트(대화)가 감지되었을 때만 분석 실행
+            - 사람 감지만으로는 분석하지 않음 (원본 contextllm과 동일)
 
         분석 방식:
-            - 텍스트 있음: analyze_with_image(text, frame) → 음성+영상 통합 분석
-            - 텍스트 없음: analyze_with_image(기본 프롬프트, frame) → 영상만 분석
+            - analyze_with_image(텍스트, 프레임) → 음성+영상 통합 분석
         """
         if self._system is None:
             return {"analyzed": False, "reason": "system_not_ready"}
@@ -229,15 +227,15 @@ class ContextLLMModule(BaseModule):
                 speech_text = self._pending_text
                 self._pending_text = None  # 소비
 
-        # 트리거 판정: 사람 감지 OR 음성 텍스트
+        # ★ 트리거: 대화(STT 텍스트)가 감지된 경우에만 분석 ★
+        has_speech = speech_text is not None
         yolo_result = shared_data.get("results", {}).get("yolo", {})
         has_person = yolo_result.get("person_detected", False)
-        has_speech = speech_text is not None
 
-        if not has_person and not has_speech:
+        if not has_speech:
             return {
                 "analyzed": False,
-                "reason": "no_trigger",
+                "reason": "no_speech",
                 "display_result": self.get_display_result(),
             }
 
