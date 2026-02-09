@@ -1,49 +1,184 @@
 <!DOCTYPE html>
-<html>
+<html lang="ko">
 <head>
-    <title>관제 대시보드</title>
+    <meta charset="UTF-8">
+    <title>통합 관제 대시보드</title>
     <style>
-        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: #1a1a1a; color: white; display: flex; flex-direction: column; align-items: center; }
-        .container { display: flex; gap: 30px; margin-top: 20px; width: 95%; }
-        .card { background: #2d2d2d; border-radius: 15px; padding: 20px; flex: 1; box-shadow: 0 4px 15px rgba(0,0,0,0.5); display: flex; flex-direction: column; }
-        #radar-container { position: relative; width: 200px; height: 200px; border: 2px solid #444; border-radius: 50%; margin: 0 auto; }
-        #pointer { 
-            width: 4px; height: 100px; background: #ff4757; position: absolute; 
-            top: 50%; left: 50%; transform-origin: top center; transition: 0.5s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+        body { 
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; 
+            background: #1a1a1a; 
+            color: white; 
+            display: flex; 
+            flex-direction: column; 
+            align-items: center; 
+            margin: 0; 
+            padding: 20px;
+            height: 100vh; 
+            box-sizing: border-box;
+            overflow: hidden;
         }
+
+        h1 { margin: 0 0 15px 0; font-size: 24px; flex-shrink: 0; }
+
+        .container { 
+            display: flex; 
+            gap: 20px; 
+            width: 98%; 
+            max-width: 1600px;
+            flex: 1; 
+            min-height: 0; 
+            align-items: stretch; 
+        }
+
+        .card { 
+            background: #2d2d2d; 
+            border-radius: 15px; 
+            padding: 20px; 
+            box-shadow: 0 4px 15px rgba(0,0,0,0.5); 
+            display: flex; 
+            flex-direction: column; 
+        }
+
+        .video-card { flex: 1.4; min-width: 600px; }
+        .video-wrapper {
+            flex: 1;
+            background: #000;
+            border-radius: 10px;
+            overflow: hidden;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        #live-video { width: 100%; height: 100%; object-fit: contain; }
+
+        .right-column {
+            display: flex; 
+            flex-direction: column; 
+            gap: 20px; 
+            flex: 1;
+            min-width: 380px;
+        }
+
+        /* 레이더 카드 수정 */
+        .radar-card { 
+            height: auto; 
+            min-height: 250px; 
+            text-align: center; 
+            justify-content: center; 
+            flex-shrink: 0;
+        }
+        
+        /* 레이더 컨테이너: 가로세로 비율 1:1 고정으로 찌그러짐 방지 */
+        #radar-container { 
+            position: relative; 
+            width: 160px; height: 160px; 
+            border: 2px solid #444; border-radius: 50%; 
+            margin: 10px auto; 
+            background: radial-gradient(circle, #222 0%, #111 100%);
+            box-sizing: border-box;
+        }
+
+        /* 바늘 공통 스타일: 정확한 중앙 정렬 */
+        .pointer {
+            width: 4px; 
+            position: absolute; 
+            top: 50%; 
+            left: 50%; 
+            transform-origin: top center; 
+            border-radius: 2px;
+            /* 초기 위치 및 중앙 보정 */
+            transform: translate(-50%, 0%) rotate(180deg);
+            transition: 0.5s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+        }
+
+        /* 카메라 바늘 (빨간색) */
+        #pointer { height: 75px; background: #ff4757; z-index: 10; box-shadow: 0 0 8px rgba(255, 71, 87, 0.4); }
+
+        /* 마이크 바늘 (파란색) */
+        #pointer-mic { height: 65px; background: #1e90ff; z-index: 5; opacity: 0.7; box-shadow: 0 0 8px rgba(30, 144, 255, 0.4); }
+
+        .log-card { 
+            flex: 1; 
+            min-height: 0; 
+        }
+        
+        .log-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 10px;
+            flex-shrink: 0;
+        }
+
+        .log-header h3 { margin: 0; font-size: 18px; }
+
+        /* 버튼 그룹 */
+        .header-btns { display: flex; gap: 8px; }
+
         #log { 
-            height: 350px; overflow-y: auto; background: #111; padding: 10px; 
-            font-size: 13px; border-radius: 5px; color: #eee;
-            display: flex; flex-direction: column; gap: 6px;
+            flex: 1; 
+            overflow-y: auto; 
+            background: #111; 
+            padding: 10px; 
+            border-radius: 8px; 
+            font-size: 13px; 
+            color: #eee;
+            display: flex; 
+            flex-direction: column; 
+            gap: 8px;
         }
-        .log-entry { background: #1f1f1f; padding: 8px; border-radius: 6px; border-left: 4px solid #444; }
+
+        #log::-webkit-scrollbar { width: 8px; }
+        #log::-webkit-scrollbar-thumb { background: #444; border-radius: 10px; }
+
+        .log-entry { background: #1f1f1f; padding: 10px; border-radius: 6px; border-left: 4px solid #444; flex-shrink: 0; }
         .tag { background: #3d3d3d; color: #2ed573; padding: 2px 6px; border-radius: 4px; font-size: 11px; margin-right: 4px; border: 1px solid #444; }
+        
+        button { padding: 6px 12px; border: none; border-radius: 6px; cursor: pointer; font-weight: bold; font-size: 12px; transition: 0.2s; }
+        .btn-db { background: #1e90ff; color: white; }
+        .btn-db:hover { background: #0077e6; }
+        .btn-clear { background: #444; color: #aaa; }
+        .btn-clear:hover { background: #ff4757; color: white; }
+
         #logModal { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.85); z-index: 1000; }
-        .modal-content { background: #2d2d2d; width: 80%; max-width: 750px; margin: 5% auto; padding: 25px; border-radius: 15px; position: relative; box-shadow: 0 5px 20px rgba(0,0,0,1); }
-        #dbLogList { height: 450px; overflow-y: auto; background: #111; padding: 15px; color: #2ed573; font-family: 'Courier New', monospace; border-radius: 5px; margin-top: 15px; }
+        .modal-content { background: #2d2d2d; width: 80%; max-width: 750px; margin: 50px auto; padding: 25px; border-radius: 15px; position: relative; }
+        #dbLogList { height: 450px; overflow-y: auto; background: #111; padding: 15px; color: #2ed573; font-family: 'Courier New', monospace; border-radius: 5px; }
         .close-btn { position: absolute; right: 25px; top: 15px; cursor: pointer; font-size: 30px; color: #aaa; }
     </style>
 </head>
 <body>
-    <h1>대시보드</h1>
+    <h1>관제 대시보드</h1>
     
-    <div style="margin-bottom: 10px;">
-        <button onclick="openLogModal()" style="padding: 10px 20px; background: #1e90ff; color: white; border: none; border-radius: 8px; cursor: pointer; font-weight: bold;">
-            과거 로그 조회
-        </button>
-    </div>
-
     <div class="container">
-        <div class="card">
-            <h3>카메라 현재 각도</h3>
-            <div id="radar-container">
-                <div id="pointer"></div>
+        <div class="card video-card">
+            <h3 style="margin-top:0;">실시간 모니터링</h3>
+            <div class="video-wrapper">
+                <img id="live-video" src="/video_feed" alt="실시간 스트림 연결 중...">
             </div>
-            <p id="angle-display" style="text-align:center; font-size:20px; font-weight:bold;">0°</p>
         </div>
-        <div class="card">
-            <h3>실시간 이벤트 로그</h3>
-            <div id="log"></div>
+
+        <div class="right-column">
+            <div class="card radar-card">
+                <h3 style="margin-top:0;">감지 각도</h3>
+                <div id="radar-container">
+                    <div id="pointer" class="pointer"></div>
+                    <div id="pointer-mic" class="pointer"></div>
+                </div>
+                <p id="angle-display" style="font-size:15px; font-weight:bold; margin:5px 0;">
+                    카메라: <span id="cam-val" style="color:#ff4757">0</span>° | 마이크: <span id="mic-val" style="color:#1e90ff">0</span>°
+                </p>
+            </div>
+
+            <div class="card log-card">
+                <div class="log-header">
+                    <h3>실시간 이벤트 로그</h3>
+                    <div class="header-btns">
+                        <button class="btn-db" onclick="openLogModal()">과거 로그(DB) 조회</button>
+                        <button class="btn-clear" onclick="document.getElementById('log').innerHTML=''">지우기</button>
+                    </div>
+                </div>
+                <div id="log"></div>
+            </div>
         </div>
     </div>
 
@@ -52,9 +187,7 @@
             <span class="close-btn" onclick="closeLogModal()">&times;</span>
             <h2 style="margin-top: 0;">DB 로그 기록 (최근 50개)</h2>
             <div id="dbLogList">조회된 데이터가 없습니다.</div>
-            <button onclick="fetchDbLogs()" style="margin-top: 15px; width: 100%; padding: 12px; background: #2ed573; border: none; color: black; font-weight: bold; border-radius: 5px; cursor: pointer;">
-                새로고침
-            </button>
+            <button onclick="fetchDbLogs()" style="margin-top: 15px; width: 100%; background: #2ed573; color: black; padding: 12px;">로그 새로고침</button>
         </div>
     </div>
 
@@ -63,11 +196,13 @@
         const wsUrl = `${protocol}//${window.location.host}/ws/monitor`;
         const ws = new WebSocket(wsUrl);
 
-        const pointer = document.getElementById('pointer');
+        const pointerCam = document.getElementById('pointer');
+        const pointerMic = document.getElementById('pointer-mic');
         const log = document.getElementById('log');
-        const angleDisplay = document.getElementById('angle-display');
+        
+        const camVal = document.getElementById('cam-val');
+        const micVal = document.getElementById('mic-val');
 
-        // 시간을 YYYY-MM-DD-HH:mm:ss 형식으로 포맷팅하는 함수
         function formatKST(date) {
             const d = new Date(date.toLocaleString('en-US', { timeZone: 'Asia/Seoul' }));
             const pad = (n) => n.toString().padStart(2, '0');
@@ -76,17 +211,15 @@
 
         ws.onmessage = (event) => { 
             const rawData = JSON.parse(event.data);
-            
-            // 1. 수신 시간 생성 (KST)
             const serverTime = formatKST(new Date());
-
             const payload = rawData.data && typeof rawData.data === 'object' ? rawData.data : rawData;
+            
             const entry = document.createElement('div');
             entry.className = 'log-entry';
             
             if (rawData.type === "CAMERA_MOVE") entry.style.borderLeftColor = "#ff4757";
             else if (rawData.type === "AUDIO_DETECTION") entry.style.borderLeftColor = "#1e90ff";
-            else entry.style.borderLeftColor = "#ffa500";
+            else entry.style.borderLeftColor = "#2ed573";
 
             let tagsHtml = "";
             Object.entries(payload).forEach(([key, value]) => {
@@ -106,20 +239,29 @@
             `;
 
             log.prepend(entry);
+            log.scrollTop = 0; 
 
             if (rawData.type === "CAMERA_MOVE") {
                 const rawAngle = payload.angle ?? payload.target_pan ?? rawData.angle ?? rawData.target_pan;
-                if (rawAngle !== undefined && rawAngle !== null) {
+                if (rawAngle !== undefined) {
                     let numericAngle = parseFloat(rawAngle);
-                    if (!isNaN(numericAngle)) {
-                        numericAngle = ((numericAngle % 360) + 360) % 360;
-                        pointer.style.transform = `translate(-50%, 0%) rotate(${numericAngle + 180}deg)`;
-                        angleDisplay.innerText = `${numericAngle.toFixed(1)}°`;
-                    }
+                    numericAngle = ((numericAngle % 360) + 360) % 360;
+                    pointerCam.style.transform = `translate(-50%, 0%) rotate(${numericAngle + 180}deg)`;
+                    camVal.innerText = numericAngle.toFixed(1);
                 }
             }
 
-            if (log.childNodes.length > 20) log.removeChild(log.lastChild);
+            if (rawData.type === "AUDIO_DETECTION") {
+                const rawAngle = payload.angle;
+                if (rawAngle !== undefined) {
+                    let numericAngle = parseFloat(rawAngle);
+                    numericAngle = ((numericAngle % 360) + 360) % 360;
+                    pointerMic.style.transform = `translate(-50%, 0%) rotate(${numericAngle + 180}deg)`;
+                    micVal.innerText = numericAngle.toFixed(1);
+                }
+            }
+
+            if (log.childNodes.length > 50) log.removeChild(log.lastChild);
         };
 
         async function openLogModal() { document.getElementById('logModal').style.display = 'block'; await fetchDbLogs(); }
@@ -127,56 +269,22 @@
 
         async function fetchDbLogs() {
             const listDiv = document.getElementById('dbLogList');
-            listDiv.innerHTML = "데이터를 불러오는 중...";
-            
+            listDiv.innerHTML = "조회 중...";
             try {
                 const response = await fetch("/logs");
                 const logs = await response.json();
                 listDiv.innerHTML = ""; 
-                
-                if (logs.length === 0) {
-                    listDiv.innerHTML = "저장된 로그가 없습니다.";
-                    return;
-                }
-
                 logs.forEach(data => {
                     const item = document.createElement('div');
-                    item.style.borderBottom = "1px solid #444";
-                    item.style.padding = "10px 5px";
-                    item.style.fontSize = "12px";
-                    
-                    // DB 시간 한국 시간으로 보정
-                    // "2024-05-22 07:00:00" 처럼 올 경우를 대비해 보정 로직 강화
-                    let dbDate;
-                    if (data.timestamp) {
-                        // SQLite 등에서 T나 Z 없이 올 경우 강제로 KST로 인식하지 않게 ISO 형식으로 보정할 수 있음
-                        dbDate = new Date(data.timestamp.replace(" ", "T") + (data.timestamp.includes("Z") ? "" : "Z"));
-                        if (isNaN(dbDate)) dbDate = new Date(data.timestamp); // 보정 실패 시 원본 시도
-                    } else {
-                        dbDate = new Date();
-                    }
-                    
+                    item.style.borderBottom = "1px solid #333";
+                    item.style.padding = "10px 0";
+                    let dbDate = data.timestamp ? new Date(data.timestamp.replace(" ", "T") + (data.timestamp.includes("Z") ? "" : "Z")) : new Date();
+                    if (isNaN(dbDate)) dbDate = new Date(data.timestamp);
                     const kstTime = formatKST(dbDate);
-
-                    const header = `<div style="margin-bottom: 5px;">
-                        <span style="color: #888;">[${kstTime}]</span> 
-                        <strong style="color: #1e90ff; font-size: 14px; margin-left: 5px;">${data.source}</strong> 
-                        <span style="background: #444; padding: 1px 5px; border-radius: 3px; font-size: 10px; margin-left: 5px;">${data.type}</span>
-                    </div>`;
-
-                    let details = "";
-                    Object.entries(data).forEach(([key, value]) => {
-                        if (!['id', 'timestamp', 'source', 'type'].includes(key)) {
-                            details += `<span style="margin-right: 15px; color: #ccc;"><b>${key}:</b> <span style="color: #2ed573;">${value}</span></span>`;
-                        }
-                    });
-
-                    item.innerHTML = header + `<div style="display: flex; flex-wrap: wrap;">${details}</div>`;
+                    item.innerHTML = `<span style="color:#888;">[${kstTime}]</span> <b>${data.source}</b>: ${data.type} (각도: ${data.angle}°)`;
                     listDiv.appendChild(item);
                 });
-            } catch (e) {
-                listDiv.innerHTML = "❌ 에러 발생: " + e.message;
-            }
+            } catch (e) { listDiv.innerHTML = "에러: " + e.message; }
         }
     </script>
 </body>
