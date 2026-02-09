@@ -1,1 +1,120 @@
+# ============================================================
+# KNU-MM 통합 멀티모달 관제 시스템 .gitignore
+# ============================================================
+
+# ─── OS ───
 .DS_Store
+.AppleDouble
+.LSOverride
+Thumbs.db
+Desktop.ini
+
+# ─── Python ───
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+*.pyo
+*.pyd
+
+# ─── 가상환경 ───
+.venv/
+venv/
+env/
+ENV/
+
+# ─── IDE / 에디터 ───
+.vscode/
+!.vscode/settings.json
+!.vscode/tasks.json
+.idea/
+*.swp
+*.swo
+*~
+*.code-workspace
+
+# ─── 환경 변수 / 시크릿 (절대 커밋 금지) ───
+.env
+.env.local
+.env.*
+!.env.example
+config/.env
+config/*.env
+config/*.secret
+config/*.key
+config/*.pem
+
+# ─── API 키 포함 가능한 설정 파일 ───
+contextllm/config/config.yaml
+!contextllm/config/config.yaml.example
+
+# ─── YOLO 모델 파일 (용량 큼) ───
+*.pt
+*.onnx
+*.engine
+*.tflite
+
+# ─── 로그 / 데이터 ───
+*.log
+data/logs/
+contextllm/data/logs/
+transcriptions/
+
+# ─── 녹음 / 미디어 파일 ───
+recording.wav
+recordings/
+contextllm/recordings/
+*.wav
+*.mp3
+*.mp4
+*.avi
+
+# ─── 웹캠 / 스크린샷 ───
+webcam_frames/
+screenshots/
+contextllm/webcam_frames/
+contextllm/screenshots/
+
+# ─── 테스트 아티팩트 ───
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+
+# ─── Node.js (웹 대시보드용) ───
+node_modules/
+npm-debug.log
+yarn-error.log
+
+# ─── 빌드 결과 ───
+out/
+dist/
+
+# ─── 인증서 ───
+*.pem
+*.key
+*.crt
+
+# ─── 임시 파일 ───
+*.tmp
+*.temp
+temp/
+tempCodeRunnerFile.py
