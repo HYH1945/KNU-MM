@@ -10,6 +10,7 @@
     - 프레임 메타데이터 (timestamp, count)
 """
 
+import os
 import cv2
 import threading
 import time
@@ -18,13 +19,16 @@ from typing import Optional
 
 import numpy as np
 
-from integrated_system.core.module_loader import DETECT_DIR, ensure_path
+from integrated_system.core.module_loader import DETECT_DIR, import_from_file
 
 logger = logging.getLogger(__name__)
 
-# 원본 VideoStreamHandler import
-ensure_path(DETECT_DIR)
-from services.stream_handler import VideoStreamHandler
+# ★ 원본 VideoStreamHandler를 직접 파일 로드 (services/__init__.py의 onvif 의존성 우회) ★
+_stream_mod = import_from_file(
+    "_orig_stream_handler",
+    os.path.join(DETECT_DIR, "services", "stream_handler.py")
+)
+VideoStreamHandler = _stream_mod.VideoStreamHandler
 
 
 class SharedStreamManager:

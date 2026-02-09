@@ -72,13 +72,14 @@ def load_config(config_path: str) -> dict:
     if contextllm_env.exists():
         load_dotenv(contextllm_env)
 
-    # 환경변수 오버라이드
+    # config.yaml 우선, 값이 비어있을 때만 환경변수 사용
     cam = config.setdefault("camera", {})
-    cam["rtsp_url"] = os.getenv("RTSP_URL", cam.get("rtsp_url", ""))
-    cam["ip"] = os.getenv("CAMERA_IP", cam.get("ip", ""))
-    cam["port"] = int(os.getenv("CAMERA_PORT", cam.get("port", 80)))
-    cam["user"] = os.getenv("CAMERA_USER", cam.get("user", ""))
-    cam["password"] = os.getenv("CAMERA_PASSWORD", cam.get("password", ""))
+    if not cam.get("rtsp_url") and cam.get("rtsp_url") != 0:
+        cam["rtsp_url"] = os.getenv("RTSP_URL", "")
+    cam["ip"] = cam.get("ip") or os.getenv("CAMERA_IP", "")
+    cam["port"] = int(cam.get("port") or os.getenv("CAMERA_PORT", 80))
+    cam["user"] = cam.get("user") or os.getenv("CAMERA_USER", "")
+    cam["password"] = cam.get("password") or os.getenv("CAMERA_PASSWORD", "")
 
     return config
 
@@ -113,7 +114,21 @@ def build_system(config: dict, args) -> tuple:
 
     # 2. 공유 리소스 생성
     cam_cfg = config.get("camera", {})
-    rtsp_url = cam_cfg.get("rtsp_url", 0)
+    
+    # 테스트 영상 우선 확인
+    test_video_path = cam_cfg.get("test_video", "")
+    if test_video_path:
+        # 상대경로면 프로젝트 루트 기준으로 변환
+        if not os.path.isabs(test_video_path):
+            test_video_path = str(PROJECT_ROOT / test_video_path)
+        if os.path.exists(test_video_path):
+            rtsp_url = test_video_path
+            logging.info(f"🎬 테스트 영상 모드: {test_video_path}")
+        else:
+            logging.warning(f"⚠️  테스트 영상 파일 없음: {test_video_path} → 웹캠으로 폴백")
+            rtsp_url = cam_cfg.get("rtsp_url", 0)
+    else:
+        rtsp_url = cam_cfg.get("rtsp_url", 0)
     
     # 숫자 문자열을 int로 변환 (0=웹캠, 1=두번째 카메라 등)
     if isinstance(rtsp_url, str) and rtsp_url.isdigit():
@@ -273,6 +288,8 @@ def run_main_loop(orch: Orchestrator, stream: SharedStreamManager, config: dict,
     display_stt_time = 0.0
     display_llm = {}
     display_doa_angle = -1
+    display_yolo_objects = []   # YOLO 결과를 프레임 간 유지
+    display_yolo_mode = "N/A"   # YOLO 모드를 프레임 간 유지
 
     logger = logging.getLogger("MainLoop")
     logger.info(f"━━━ 메인 루프 시작 (파이프라인: {pipeline_name}, 매 {process_every}프레임) ━━━")
@@ -322,6 +339,12 @@ def run_main_loop(orch: Orchestrator, stream: SharedStreamManager, config: dict,
                     "frame_count": frame_count,
                 })
 
+            # YOLO 결과 갱신 (프레임 간 유지)
+            yolo_result = results.get("yolo", {})
+            if "objects" in yolo_result:
+                display_yolo_objects = yolo_result["objects"]
+                display_yolo_mode = yolo_result.get("mode", "N/A")
+
             # LLM 결과 갱신
             llm_result = results.get("context_llm", {})
             if llm_result.get("analyzed"):
@@ -332,11 +355,10 @@ def run_main_loop(orch: Orchestrator, stream: SharedStreamManager, config: dict,
                 display_frame = frame.copy()
                 h, w = display_frame.shape[:2]
 
-                # ── 1. YOLO 박스 그리기 ──
+                # ── 1. YOLO 박스 그리기 (프레임 간 유지된 결과 사용) ──
                 yolo_mod = orch.get_module("yolo")
-                yolo_result = results.get("yolo", {})
-                if yolo_mod and yolo_result.get("objects"):
-                    display_frame = yolo_mod.get_annotated_frame(display_frame, yolo_result["objects"])
+                if yolo_mod and display_yolo_objects:
+                    display_frame = yolo_mod.get_annotated_frame(display_frame, display_yolo_objects)
 
                 # ── 2. 상단 정보 바 (반투명 검정) ──
                 overlay = display_frame.copy()
@@ -347,9 +369,8 @@ def run_main_loop(orch: Orchestrator, stream: SharedStreamManager, config: dict,
                 cv2.putText(display_frame, f"FPS: {fps:.1f}", (10, 25),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
 
-                # YOLO 모드
-                yolo_mode = yolo_result.get("mode", "N/A")
-                cv2.putText(display_frame, f"Mode: {yolo_mode}", (10, 55),
+                # YOLO 모드 (프레임 간 유지된 값 사용)
+                cv2.putText(display_frame, f"Mode: {display_yolo_mode}", (10, 55),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 255, 255), 2)
 
                 # 파이프라인 표시
