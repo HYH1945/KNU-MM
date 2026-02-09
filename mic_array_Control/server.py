@@ -5,9 +5,10 @@ import redis.asyncio as redis
 from datetime import datetime
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel
 import uvicorn
+import cv2
 
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -127,6 +128,33 @@ async def websocket_endpoint(websocket: WebSocket):
     finally:
         await pubsub.unsubscribe('security_events')
         await r.aclose()
+
+RTSP_URL = "rtsp://admin:saloris4321@192.168.0.60:554/Streaming/Channels/101"
+os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = "rtsp_transport;tcp"
+video_cap = cv2.VideoCapture(RTSP_URL)
+
+def generate_frames():
+    while True:
+        success, frame = video_cap.read()
+        if not success:
+            break
+        else:
+            # 프레임 크기 조절 (선택 사항: 대시보드 크기에 맞춤)
+            frame = cv2.resize(frame, (640, 480))
+            # JPEG로 인코딩
+            ret, buffer = cv2.imencode('.jpg', frame)
+            frame_bytes = buffer.tobytes()
+            
+            # MJPEG 규격에 맞춰 yield
+            yield (b'--frame\r\n'
+                   b'Content-Type: image/jpeg\r\n\r\n' + frame_bytes + b'\r\n')
+
+@app.get("/video_feed")
+async def video_feed():
+    """실시간 영상 스트리밍 엔드포인트"""
+    return StreamingResponse(generate_frames(), 
+                             media_type="multipart/x-mixed-replace; boundary=frame")
+
 
 if __name__ == "__main__":
     # 포트 번호와 경로를 다시 한번 확인하세요
