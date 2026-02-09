@@ -266,6 +266,61 @@ system.use_testset("testsets/")
 
 ---
 
-## 📄 라이선스
+## � 보안
+
+### API 키 관리 (필수)
+
+**절대 API 키를 코드나 리포지토리에 커밋하지 마세요!**
+
+```bash
+# ❌ 절대 하지 말 것
+OPENAI_API_KEY=sk-abc123...  # 코드에 하드코딩
+config/config.yaml에 API 키 저장
+
+# ✅ 권장 방법 (아래 중 하나)
+
+# 방법 1: 환경 변수 (권장)
+export OPENAI_API_KEY=sk-your-key-here
+python main.py -m realtime
+
+# 방법 2: .env 파일 (로컬 개발)
+cp .env.example .env
+# .env에 OPENAI_API_KEY=sk-... 입력
+# .env는 .gitignore에 등록되어 자동 무시됨
+
+# 방법 3: 설정 파일
+cp config/config.yaml.example config/config.yaml
+# config/config.yaml의 api_keys.openai 입력
+# config.yaml은 .gitignore에 등록되어 자동 무시됨
+```
+
+### 보안 체크리스트
+
+- ✅ 환경 변수 또는 `.env` 파일로 API 키 관리
+- ✅ 로컬 설정 파일 (`config.yaml`, `.env`) Git에서 제외
+- ✅ 웹 대시보드는 `localhost:5000`에서만 실행 (외부 공개 안 함)
+- ✅ 녹음/로그 파일은 `data/logs/`, `recordings/`에 저장 (Git 제외)
+- ✅ Flask SECRET_KEY는 환경 변수에서 로드
+
+### 배포 시 보안 조치
+
+1. **환경 변수 설정**
+   ```bash
+   export OPENAI_API_KEY=your-production-key
+   export FLASK_SECRET_KEY=your-secret-key
+   ```
+
+2. **웹 대시보드 접근 제한**
+   ```python
+   # 필요시 인증 추가 (예: nginx 기본 인증)
+   ```
+
+3. **로그 및 녹음 파일 보안**
+   - 개인 정보 포함 가능하므로 접근 제한
+   - 정기적인 삭제 정책 수립
+
+---
+
+## �📄 라이선스
 
 MIT License

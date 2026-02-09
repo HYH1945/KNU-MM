@@ -1,0 +1,30 @@
+# KNU-MM 통합 멀티모달 관제 시스템 의존성
+# pip install -r requirements.txt
+
+# ─── 공통 ───
+opencv-python>=4.8.0
+numpy>=1.24.0
+PyYAML>=6.0
+python-dotenv>=1.0.0
+requests>=2.31.0
+
+# ─── YOLO 객체 탐지 (Detaction_CCTV) ───
+ultralytics>=8.0.0
+torch>=2.0.0
+
+# ─── PTZ 카메라 제어 ───
+onvif-zeep>=0.2.12
+
+# ─── 마이크 어레이 (mic_array_Control) ───
+pyusb>=1.2.1
+# (ReSpeaker v2 전용 - Linux/macOS만 지원)
+
+# ─── Context LLM ───
+openai>=1.0.0
+SpeechRecognition>=3.10.0
+pyaudio>=0.2.13
+tiktoken>=0.5.0
+
+# ─── 선택 사항 ───
+# flask>=3.0.0            # 웹 대시보드용
+# flask-socketio>=5.3.0   # 웹 실시간 통신

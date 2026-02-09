@@ -74,10 +74,17 @@ def create_system(args):
     # 모델 설정
     model = args.model or CONFIG.get('model', 'gpt-4o-mini')
     
+    # 음성 인식 설정
+    speech_cfg = CONFIG.get('speech', {})
+    energy_threshold = args.energy_threshold or speech_cfg.get('energy_threshold', 400)
+    dynamic_threshold = getattr(args, 'dynamic_threshold', speech_cfg.get('dynamic_threshold', False))
+    
     system = IntegratedMultimodalSystem(
         camera_id=camera_id,
         model=model,
-        downsampling_config=config
+        downsampling_config=config,
+        energy_threshold=energy_threshold,
+        dynamic_threshold=dynamic_threshold
     )
     
     return system
@@ -85,35 +92,29 @@ def create_system(args):
 
 def mode_realtime(args):
     """실시간 모드: 음성 감지 → 영상 캡처 → 분석"""
-    print("\n" + "=" * 60)
-    print("🎙️  실시간 멀티모달 분석 모드")
-    print("=" * 60)
-    
     system = create_system(args)
     
     # 반복 횟수 (CLI 인자 > config.yaml)
     analysis_cfg = CONFIG.get('analysis', {})
+    logging_cfg = CONFIG.get('logging', {})
+    
     iterations = args.iterations
     if iterations is None:
         iterations = analysis_cfg.get('iterations')
     
-    if iterations:
-        print(f"   {iterations}회 반복 후 종료")
-        system.start_monitoring(max_iterations=iterations)
-    else:
-        print("   무한 반복 (Ctrl+C로 종료)")
-        system.start_monitoring()
+    # verbose 설정 (CLI 인자 > config.yaml)
+    verbose = args.verbose if hasattr(args, 'verbose') and args.verbose else logging_cfg.get('verbose', False)
+    
+    system.start_monitoring(max_iterations=iterations, verbose=verbose)
 
 
 def mode_testset(args):
-    """테스트셋 모드: 폴더 내 파일들 분석"""
-    print("\n" + "=" * 60)
-    print("📁 테스트셋 분석 모드")
-    print("=" * 60)
-    
+    """테스트셋 모드: 음성 인식 후 테스트셋 이미지로 분석"""
     # 테스트셋 경로 (CLI 인자 > config.yaml > 기본값)
     video_cfg = CONFIG.get('video', {})
+    logging_cfg = CONFIG.get('logging', {})
     testset_path = args.testset_path or video_cfg.get('testset_path', 'testsets')
+    verbose = args.verbose if hasattr(args, 'verbose') and args.verbose else logging_cfg.get('verbose', False)
     
     if not Path(testset_path).exists():
         print(f"❌ 테스트셋 폴더를 찾을 수 없습니다: {testset_path}")
@@ -128,63 +129,36 @@ def mode_testset(args):
         print("❌ 테스트셋 폴더에 파일이 없습니다")
         return
     
-    print(f"\n📋 파일 목록 ({len(files)}개):")
-    for i, f in enumerate(files):
-        print(f"   {i}: {f}")
+    if verbose:
+        print(f"\n📋 파일 목록 ({len(files)}개):")
+        for i, f in enumerate(files):
+            print(f"   {i}: {f}")
     
-    # 분석 실행
+    # 파일 선택
     analysis_cfg = CONFIG.get('analysis', {})
-    analyze_all = args.all or analysis_cfg.get('analyze_all_testset', False)
-    text_input = args.text or analysis_cfg.get('default_text', '')
+    file_index = args.index
+    if file_index is None:
+        file_index = analysis_cfg.get('testset_index', 0)
     
-    if analyze_all:
-        # 전체 분석
-        print(f"\n🔍 전체 파일 분석 시작...")
-        results = system.analyze_testset_all(text_input or None)
-        
-        # 결과 요약
-        print("\n" + "=" * 60)
-        print("📊 분석 결과 요약")
-        print("=" * 60)
-        
-        for r in results:
-            filename = r.get("filename", "N/A")
-            success = r.get("success", False)
-            
-            if success:
-                analysis = r.get("multimodal_analysis", {})
-                priority = analysis.get("priority", "N/A")
-                urgency = analysis.get("urgency", "N/A")
-                is_emergency = analysis.get("is_emergency", False)
-                
-                status = "🚨" if is_emergency else "✅"
-                print(f"   {status} {filename}: {priority} / {urgency}")
-            else:
-                print(f"   ❌ {filename}: 실패")
-    else:
-        # 단일 파일 분석
-        file_index = args.index
-        if file_index is None:
-            file_index = analysis_cfg.get('testset_index')
-        
-        if file_index is not None:
-            system.select_testset_file(file_index)
-        
-        result = system.analyze_video_only(text_input or None)
-        print_result(result)
+    system.select_testset_file(file_index)
+    print(f"📁 테스트 이미지: {files[file_index]}")
     
-    system.video_manager.close()
+    # 반복 횟수
+    iterations = args.iterations
+    if iterations is None:
+        iterations = analysis_cfg.get('iterations')
+    
+    # 실시간 모니터링 시작 (음성 인식 → 테스트 이미지 분석)
+    system.start_monitoring(max_iterations=iterations, verbose=verbose)
 
 
 def mode_file(args):
-    """파일 모드: 특정 이미지/비디오 분석"""
-    print("\n" + "=" * 60)
-    print("📄 파일 분석 모드")
-    print("=" * 60)
-    
+    """파일 모드: 음성 인식 후 지정 파일로 분석"""
     # 파일 경로 (CLI 인자 > config.yaml)
     video_cfg = CONFIG.get('video', {})
+    logging_cfg = CONFIG.get('logging', {})
     file_path = args.file or video_cfg.get('file_path', '')
+    verbose = args.verbose if hasattr(args, 'verbose') and args.verbose else logging_cfg.get('verbose', False)
     
     if not file_path:
         print("❌ 파일 경로를 지정하세요: -f <파일경로>")
@@ -197,52 +171,55 @@ def mode_file(args):
     system = create_system(args)
     system.use_file(file_path)
     
-    print(f"📂 파일: {file_path}")
+    print(f"📁 파일: {file_path}")
     
-    # 텍스트 입력
+    # 반복 횟수
     analysis_cfg = CONFIG.get('analysis', {})
-    text_input = args.text or analysis_cfg.get('default_text', '')
+    iterations = args.iterations
+    if iterations is None:
+        iterations = analysis_cfg.get('iterations')
     
-    result = system.analyze_video_only(text_input or None)
-    print_result(result)
-    
-    system.video_manager.close()
+    # 실시간 모니터링 시작 (음성 인식 → 파일 분석)
+    system.start_monitoring(max_iterations=iterations, verbose=verbose)
 
 
 def mode_webcam(args):
-    """웹캠 모드: 음성 없이 웹캠 영상만 분석"""
-    print("\n" + "=" * 60)
-    print("📹 웹캠 분석 모드 (음성 없이)")
-    print("=" * 60)
-    
+    """웹캠 모드: 음성 인식 후 웹캠 캡처 분석"""
     # 카메라 ID (CLI 인자 > config.yaml > 기본값)
     video_cfg = CONFIG.get('video', {})
+    logging_cfg = CONFIG.get('logging', {})
+    display_cfg = CONFIG.get('display', {})
     camera_id = args.camera if args.camera is not None else video_cfg.get('camera_id', 0)
+    verbose = args.verbose if hasattr(args, 'verbose') and args.verbose else logging_cfg.get('verbose', False)
     
     system = create_system(args)
     system.use_webcam(camera_id)
     
-    print(f"📷 카메라 ID: {camera_id}")
+    print(f"📷 웹캠: {camera_id}")
     
-    # 텍스트 입력
+    # OpenCV 디스플레이 설정 (라이브 모드이므로 기본 활성화)
+    use_opencv = not args.no_opencv if hasattr(args, 'no_opencv') else display_cfg.get('opencv_live', True)
+    if use_opencv or args.opencv:
+        system.enable_opencv_display(True)
+    
+    # 반복 횟수
     analysis_cfg = CONFIG.get('analysis', {})
-    text_input = args.text or analysis_cfg.get('default_text', '')
+    iterations = args.iterations
+    if iterations is None:
+        iterations = analysis_cfg.get('iterations')
     
-    result = system.analyze_video_only(text_input or None)
-    print_result(result)
-    
-    system.video_manager.close()
+    # 실시간 모니터링 시작 (음성 인식 → 웹캠 캡처 분석)
+    system.start_monitoring(max_iterations=iterations, verbose=verbose)
 
 
 def mode_network(args):
-    """네트워크 카메라 모드"""
-    print("\n" + "=" * 60)
-    print("🌐 네트워크 카메라 분석 모드")
-    print("=" * 60)
-    
+    """네트워크 카메라 모드: 음성 인식 후 네트워크 카메라 캡처 분석"""
     # URL (CLI 인자 > config.yaml)
     video_cfg = CONFIG.get('video', {})
+    logging_cfg = CONFIG.get('logging', {})
+    display_cfg = CONFIG.get('display', {})
     url = args.url or video_cfg.get('network_url', '')
+    verbose = args.verbose if hasattr(args, 'verbose') and args.verbose else logging_cfg.get('verbose', False)
     
     if not url:
         print("❌ 카메라 URL을 지정하세요: -u <URL>")
@@ -253,54 +230,62 @@ def mode_network(args):
     system = create_system(args)
     system.use_network_camera(url)
     
-    print(f"🌐 URL: {url}")
+    print(f"🌐 네트워크 카메라: {url}")
     
-    # 텍스트 입력
+    # OpenCV 디스플레이 설정 (라이브 모드이므로 기본 활성화)
+    use_opencv = not args.no_opencv if hasattr(args, 'no_opencv') else display_cfg.get('opencv_live', True)
+    if use_opencv or args.opencv:
+        system.enable_opencv_display(True)
+    
+    # 반복 횟수
     analysis_cfg = CONFIG.get('analysis', {})
-    text_input = args.text or analysis_cfg.get('default_text', '')
+    iterations = args.iterations
+    if iterations is None:
+        iterations = analysis_cfg.get('iterations')
     
-    result = system.analyze_video_only(text_input or None)
-    print_result(result)
-    
-    system.video_manager.close()
+    # 실시간 모니터링 시작 (음성 인식 → 네트워크 캡처 분석)
+    system.start_monitoring(max_iterations=iterations, verbose=verbose)
 
 
-def print_result(result):
-    """분석 결과 출력"""
-    print("\n" + "-" * 40)
-    print("📊 분석 결과")
-    print("-" * 40)
-    
+def print_result(result, verbose: bool = False):
+    """분석 결과 출력 (간소화 버전)"""
     if not result.get("success"):
         print(f"❌ 실패: {result.get('error', '알 수 없는 오류')}")
         return
     
-    # 텍스트
-    text = result.get("transcribed_text") or result.get("text_input", "")
-    if text:
-        print(f"📝 입력: {text[:80]}{'...' if len(text) > 80 else ''}")
-    
-    # 음성 특성
-    voice = result.get("voice_characteristics")
-    if voice:
-        indicators = voice.get("emergency_indicators", {})
-        score = indicators.get("overall_score", 0)
-        print(f"🎤 음성 긴급도: {score:.0%}")
-    
-    # 멀티모달 분석
     analysis = result.get("multimodal_analysis", {})
-    if analysis:
-        print(f"\n🔍 상황 분석:")
-        print(f"   상황: {analysis.get('situation', 'N/A')}")
-        print(f"   유형: {analysis.get('situation_type', 'N/A')}")
-        print(f"   위급도: {analysis.get('urgency', 'N/A')}")
-        print(f"   우선순위: {analysis.get('priority', 'N/A')}")
-        print(f"   긴급 상황: {'🚨 예' if analysis.get('is_emergency') else '아니오'}")
+    if not analysis:
+        print("⚠️  분석 결과 없음")
+        return
+    
+    # 핵심 정보만 출력
+    situation = analysis.get('situation_type', 'N/A')
+    urgency = analysis.get('urgency', 'N/A')
+    is_emergency = analysis.get('is_emergency', False)
+    consistency = analysis.get('audio_visual_consistency', 'N/A')
+    
+    icon = "🚨" if is_emergency else "✅"
+    print(f"\n{icon} [{situation}] 긴급:{urgency} | 일치도:{consistency}")
+    
+    # verbose 모드일 때만 상세 출력
+    if verbose:
+        print("-" * 40)
+        text = result.get("transcribed_text") or result.get("text_input", "")
+        if text:
+            print(f"📝 입력: {text[:80]}{'...' if len(text) > 80 else ''}")
         
-        if analysis.get('is_emergency'):
-            print(f"   긴급 사유: {analysis.get('emergency_reason', 'N/A')}")
+        voice = result.get("voice_characteristics")
+        if voice:
+            indicators = voice.get("emergency_indicators", {})
+            score = indicators.get("overall_score", 0)
+            print(f"🎤 음성 긴급도: {score:.0%}")
         
-        print(f"   권장 조치: {analysis.get('action', 'N/A')}")
+        print(f"🔍 상황: {analysis.get('situation', 'N/A')}")
+        print(f"🚨 우선순위: {analysis.get('priority', 'N/A')}")
+        
+        if is_emergency:
+            print(f"⚠️  긴급 사유: {analysis.get('emergency_reason', 'N/A')}")
+        print("-" * 40)
 
 
 def main():
@@ -350,6 +335,20 @@ def main():
     parser.add_argument('-t', '--text', default=None, help='분석에 사용할 텍스트 (음성 대신)')
     parser.add_argument('-n', '--iterations', type=int, default=None, help='반복 횟수 (realtime 모드)')
     parser.add_argument('--model', default=None, help=f"OpenAI 모델 (기본값: {CONFIG.get('model', 'gpt-4o-mini')})")
+    parser.add_argument('-v', '--verbose', action='store_true', help='상세 출력 모드')
+    
+    # 음성 인식 옵션
+    speech_cfg = CONFIG.get('speech', {})
+    parser.add_argument('--energy-threshold', type=int, default=None, help='음성 감지 에너지 임계값 (낮을수록 민감, 기본값: 400)')
+    parser.add_argument('--dynamic-threshold', action='store_true', help='동적 에너지 임계값 활성화 (실시간 마이크용)')
+    parser.add_argument('--static-threshold', action='store_false', dest='dynamic_threshold', help='고정 에너지 임계값 (스피커 소리 인식용)')
+    
+    # 디스플레이 옵션
+    display_cfg = CONFIG.get('display', {})
+    parser.add_argument('--web', action='store_true', help='웹 대시보드 활성화 (localhost:5000)')
+    parser.add_argument('--web-port', type=int, default=display_cfg.get('web_port', 5000), help='웹 대시보드 포트')
+    parser.add_argument('--opencv', action='store_true', help='OpenCV 창 활성화 (라이브 모드만)')
+    parser.add_argument('--no-opencv', action='store_true', help='OpenCV 창 비활성화')
     
     # 다운샘플링 설정 (기본값 None으로 설정하여 config.yaml 값 사용)
     parser.add_argument('--image-size', type=int, default=None, help=f"최대 이미지 크기 (기본값: {ds_cfg.get('max_image_size', 640)})")
@@ -372,6 +371,17 @@ def main():
         print(yaml.dump(CONFIG, allow_unicode=True, default_flow_style=False))
         return
     
+    # 웹 대시보드 시작
+    web_dashboard = None
+    if args.web:
+        try:
+            from web.app import start_dashboard, stop_dashboard
+            start_dashboard(port=args.web_port)
+            web_dashboard = True
+        except ImportError as e:
+            print(f"⚠️ 웹 대시보드를 시작할 수 없습니다: {e}")
+            print("   flask와 flask-socketio를 설치하세요: pip install flask flask-socketio")
+    
     # 모드별 실행
     try:
         if args.mode == 'realtime':
@@ -389,6 +399,14 @@ def main():
     except Exception as e:
         print(f"\n❌ 오류 발생: {e}")
         raise
+    finally:
+        # 웹 대시보드 정리
+        if web_dashboard:
+            try:
+                from web.app import stop_dashboard
+                stop_dashboard()
+            except:
+                pass
 
 
 if __name__ == "__main__":

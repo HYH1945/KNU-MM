@@ -1,0 +1,67 @@
+# ContextLLM 설정 파일 예제
+# 이 파일을 config.yaml로 복사하고 실제 값을 입력하세요.
+# config.yaml은 .gitignore에 등록되어 있으므로 리포지토리에 커밋되지 않습니다.
+
+# API 키 설정 (방법 중 하나를 선택)
+# 방법 1: config/config.yaml의 api_keys.openai에 입력
+# 방법 2: config/.env 파일에 OPENAI_API_KEY=sk-... 형식으로 입력
+# 방법 3: 환경변수로 설정 (export OPENAI_API_KEY=sk-...)
+
+# 권장: 방법 2 또는 3 (환경변수 사용 권장)
+api_keys:
+  openai: ""  # 또는 여기에 입력: sk-...
+
+# 모델 설정
+model: gpt-4o-mini  # gpt-4o-mini 또는 gpt-4o
+
+# 영상 설정
+video:
+  camera_id: 0                  # 웹캠 ID (0: 기본 카메라)
+  testset_path: "testsets"      # 테스트셋 폴더 경로
+  resolution:
+    width: 1280
+    height: 720
+
+# 분석 설정
+analysis:
+  iterations: null              # null: 무한 반복, 숫자: N회 반복
+  parallel: true                # 병렬 처리 (음성 인식 중 분석)
+  testset_index: 0              # 테스트셋 기본 인덱스
+  min_request_interval: 2.0     # API 레이트 리밋 최소 간격 (초)
+  max_retries: 3                # API 요청 재시도 횟수
+
+# 다운샘플링 설정
+downsampling:
+  max_image_size: 640           # 최대 이미지 크기 (픽셀)
+  jpeg_quality: 75              # JPEG 품질 (1-100)
+  video_fps: 2.0                # 분석용 FPS
+  max_video_frames: 10          # 최대 분석 프레임 수
+  video_capture_duration: 5.0   # 비디오 캡처 길이 (초)
+
+# 표시 설정
+display:
+  web_enabled: true             # 웹 대시보드 활성화
+  web_port: 5000                # 웹 대시보드 포트 (localhost만)
+  opencv_live: true             # OpenCV 라이브 디스플레이 (라이브 모드만)
+
+# 로깅 설정
+logging:
+  verbose: false                # 상세 로그 출력
+  save_logs: true               # 로그 파일 저장
+  log_dir: "data/logs"
+
+# 음성 특성 분석
+voice_characteristics:
+  enabled: true                 # 음성 특성 분석 활성화
+  analyze_emotion: true         # 감정 분석
+
+# 응답 스트리밍 설정
+streaming:
+  enabled: true                 # 실시간 응답 스트리밍
+
+# OpenAI API 설정
+openai:
+  max_tokens: 800               # 최대 응답 토큰
+  temperature: 0.3              # 창의성 (0-1, 낮을수록 일관성 있음)
+  image_detail: "low"           # low, high (저해상도는 빠르고 저렴)
+  timeout: 30                   # API 타임아웃 (초)
