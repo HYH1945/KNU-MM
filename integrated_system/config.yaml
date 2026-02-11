@@ -6,12 +6,12 @@
 # CCTV 카메라 설정
 # -----------------------------------------------------------
 camera:
-  rtsp_url: 0                        # 0=웹캠, RTSP URL 또는 파일 경로 (env: RTSP_URL)
+  rtsp_url: "rtsp://admin:saloris4321@192.168.0.60:554/Streaming/Channels/101"                        # 0=웹캠, RTSP URL 또는 파일 경로 (env: RTSP_URL)
   test_video: ""                     # 테스트 영상 경로 (설정 시 rtsp_url 대신 사용)
-  ip: ""                            # 카메라 IP (env: CAMERA_IP)
+  ip: "192.168.0.60"                            # 카메라 IP (env: CAMERA_IP)
   port: 80                          # 카메라 포트 (env: CAMERA_PORT)
-  user: ""                          # 카메라 사용자 (env: CAMERA_USER)
-  password: ""                      # 카메라 비밀번호 (env: CAMERA_PASSWORD)
+  user: "admin"                          # 카메라 사용자 (env: CAMERA_USER)
+  password: "saloris4321"                      # 카메라 비밀번호 (env: CAMERA_PASSWORD)
 
 # -----------------------------------------------------------
 # PTZ 제어 설정
@@ -68,8 +68,8 @@ stt:
 # 서버 전송 설정
 # -----------------------------------------------------------
 server:
-  enabled: false
-  url: ""                           # 대시보드 서버 URL (예: https://xxx.ngrok-free.dev/publish)
+  enabled: true
+  url: "http://localhost:8000/event"                           # 대시보드 서버 URL (예: https://xxx.ngrok-free.dev/publish)
   timeout: 2.0                      # HTTP 전송 타임아웃 (초)
 
 # -----------------------------------------------------------
@@ -96,4 +96,4 @@ display:
 # -----------------------------------------------------------
 logging:
   level: "INFO"                     # DEBUG, INFO, WARNING, ERROR
-  file: ""                          # 로그 파일 경로 (빈값이면 콘솔만)
+  file: "knu_mm_system.log"                          # 로그 파일 경로 (빈값이면 콘솔만)
