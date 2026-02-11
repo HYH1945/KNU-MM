@@ -69,32 +69,53 @@ class UnifiedPTZController:
             self._init_hikvision_http()
 
         return self._connected
-
+    
     def _init_onvif(self) -> bool:
         """
         ONVIF PTZ 초기화
-        ★ 원본 PTZCameraManager에 위임 ★
-        원본 수정 시 즉시 반영됩니다.
+        [해결] 'from config import AppConfig'가 가능하도록 모듈 구조를 모사함
         """
         try:
             import os
+            import sys
+            from types import ModuleType
+
+            # --- [강력한 Mocking] config 모듈 및 AppConfig 클래스 주입 ---
+            if 'config' not in sys.modules:
+                # 1. 실제 모듈 객체 생성
+                mock_mod = ModuleType('config')
+                
+                # 2. 원본 코드가 임포트하려는 AppConfig 클래스 정의
+                class AppConfig:
+                    CAMERA_IP = self.config.get("camera_ip", "")
+                    CAMERA_PORT = self.config.get("camera_port", 80)
+                    CAMERA_USER = self.config.get("camera_user", "")
+                    CAMERA_PASSWORD = self.config.get("camera_password", "")
+
+                # 3. 모듈에 클래스 등록
+                mock_mod.AppConfig = AppConfig
+                
+                # 4. 시스템 모듈에 주입
+                sys.modules['config'] = mock_mod
+                logger.debug("[PTZ] 가짜 config.AppConfig 클래스를 주입했습니다.")
+            # -----------------------------------------------------------
+
+            # 원본 모듈 로드
+            from integrated_system.core.module_loader import DETECT_DIR, import_from_file
             _ptz_mod = import_from_file("_orig_ptz_controller", os.path.join(DETECT_DIR, "services", "ptz_controller.py"))
             PTZCameraManager = _ptz_mod.PTZCameraManager
 
-            # PTZCameraManager는 AppConfig 객체를 파라미터로 받으므로 호환 객체 생성
-            config_obj = SimpleNamespace(
-                CAMERA_IP=self.config.get("camera_ip", ""),
-                CAMERA_PORT=self.config.get("camera_port", 80),
-                CAMERA_USER=self.config.get("camera_user", ""),
-                CAMERA_PASSWORD=self.config.get("camera_password", ""),
-            )
+            # 인스턴스 생성을 위한 설정 객체 (원본 클래스 사용)
+            from config import AppConfig
+            config_obj = AppConfig() 
 
             self._onvif_mgr = PTZCameraManager(config_obj)
-            self._connected = self._onvif_mgr._connected
+            self._connected = getattr(self._onvif_mgr, '_connected', False)
 
             if self._connected:
-                logger.info("[PTZ] ONVIF 연결 성공 (원본 PTZCameraManager 사용)")
+                logger.info("[PTZ] ONVIF 연결 성공")
             return self._connected
+
         except Exception as e:
             logger.error(f"[PTZ] ONVIF 연결 실패: {e}")
             return False
