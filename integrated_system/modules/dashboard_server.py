@@ -18,9 +18,11 @@ async def get_dashboard():
         return {"error": f"index.html을 찾을 수 없습니다. 예상 경로: {INDEX_PATH}"}
     return FileResponse(INDEX_PATH)
 
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+DB_PATH = os.path.join(BASE_DIR, "security_logs.db")
 # --- DB 초기화 ---
 def init_db():
-    conn = sqlite3.connect("security_logs.db")
+    conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS event_logs (
@@ -28,6 +30,10 @@ def init_db():
             timestamp TEXT,
             source TEXT,
             event_type TEXT,
+            priority TEXT,
+            angle REAL,
+            person_count INTEGER,
+            description TEXT,
             payload TEXT
         )
     """)
@@ -77,7 +83,7 @@ async def receive_event(request: Request):
     description = payload.get('situation', payload.get('text', ''))
 
     # 3. DB 저장 (더 많은 컬럼 사용)
-    conn = sqlite3.connect("security_logs.db")
+    conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     # 주의: 테이블 생성(init_db) 시 아래 컬럼들이 추가되어 있어야 합니다.
     cursor.execute("""
@@ -95,7 +101,7 @@ async def receive_event(request: Request):
 # 2. 과거 로그 조회 (대시보드 초기 로딩용)
 @app.get("/logs")
 async def get_logs():
-    conn = sqlite3.connect("security_logs.db")
+    conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     cursor = conn.cursor()
     cursor.execute("SELECT * FROM event_logs ORDER BY id DESC LIMIT 50")
