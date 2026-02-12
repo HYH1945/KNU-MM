@@ -156,6 +156,7 @@ def build_system(config: dict, args) -> tuple:
         "camera_user": cam_cfg.get("user", ""),
         "camera_password": cam_cfg.get("password", ""),
         "control_mode": ptz_cfg.get("control_mode", "onvif"),
+        "priority_hold_sec": ptz_cfg.get("priority_hold_sec", 0.7),
     })
     ptz.initialize()
 
@@ -175,6 +176,9 @@ def build_system(config: dict, args) -> tuple:
             dead_zone=ptz_cfg.get("dead_zone_pixels", 50),
             patrol_speed=ptz_cfg.get("patrol_speed", 0.2),
             target_classes=yolo_cfg.get("target_classes"),
+            camera_fov_deg=yolo_cfg.get("camera_fov_deg", 90.0),
+            doa_boost_weight=yolo_cfg.get("doa_boost_weight", 0.35),
+            doa_memory_sec=yolo_cfg.get("doa_memory_sec", 1.5),
         )
         orch.register(yolo_module)
 
@@ -206,6 +210,7 @@ def build_system(config: dict, args) -> tuple:
             pause_threshold=stt_cfg.get("pause_threshold", 3.0),
             phrase_time_limit=stt_cfg.get("phrase_time_limit", 15.0),
             dynamic_threshold=stt_cfg.get("dynamic_threshold", True),
+            device_index=stt_cfg.get("device_index"),
         )
         if orch.register(stt_module):
             stt_module.start_listening()

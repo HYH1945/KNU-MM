@@ -185,3 +185,25 @@
 3. STT 입력 장치 고정 설정(기본 장치 의존 제거).
 
 이 3개만 해도 “음성 방향 반영이 안 된다”는 체감은 크게 줄어들 가능성이 높습니다.
+
+---
+
+## 7) 이번 개선 반영 사항 (코드 적용 완료)
+
+아래 항목은 실제 코드에 반영되었습니다.
+
+1. **PTZ 절대각 경로 폴백 추가**
+   - Hikvision absolute 미지원 시, Mic의 absolute 요청을 ONVIF continuous 속도로 근사 변환해서 폴백.
+
+2. **PTZ 우선순위 홀드 시간 단축/설정화**
+   - 기존 고정 2초 차단 대신 `priority_hold_sec`(기본 0.7초)로 완화.
+
+3. **YOLO + DOA 융합 스코어 추가**
+   - 객체 `priority_score`에 DOA 정렬 보너스를 가산해 발화 방향 객체가 우선 타겟될 확률 증가.
+
+4. **STT 입력 장치 고정 옵션 추가**
+   - `stt.device_index` 설정 시 특정 마이크 장치를 강제 사용 가능.
+
+5. **기본 설정 보강**
+   - `ptz.control_mode: both` 권장값 반영.
+   - DOA 융합 파라미터(`camera_fov_deg`, `doa_boost_weight`, `doa_memory_sec`) 추가.

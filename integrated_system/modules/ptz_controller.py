@@ -52,6 +52,7 @@ class UnifiedPTZController:
         self._current_priority = PTZPriority.PATROL
         self._current_owner = ""
         self._last_move_time = 0.0
+        self._priority_hold_sec = float(config.get("priority_hold_sec", 0.7))
 
         # ★ 원본 PTZCameraManager 인스턴스 (ONVIF용) ★
         self._onvif_mgr = None
@@ -159,7 +160,9 @@ class UnifiedPTZController:
         """
         with self._lock:
             if priority < self._current_priority:
-                if time.time() - self._last_move_time < 2.0:
+                # 기존 2초 고정 차단은 YOLO 연속 제어 시 MIC 요청 starvation을 유발함.
+                # 설정 가능한 hold 시간 이후에는 낮은 우선순위라도 제어권을 가져갈 수 있게 완화.
+                if time.time() - self._last_move_time < self._priority_hold_sec:
                     logger.debug(f"[PTZ] 요청 거절: {owner}({priority.name}) < {self._current_owner}({self._current_priority.name})")
                     return False
 
@@ -168,6 +171,13 @@ class UnifiedPTZController:
             self._last_move_time = time.time()
 
         if move_type == "absolute":
+            # Hikvision HTTP가 비활성화된 환경(onvif-only)에서는 absolute 요청을
+            # 즉시 실패시키지 않고, 대략적인 continuous 이동으로 폴백.
+            if not self.supports_absolute:
+                logger.debug("[PTZ] absolute 미지원 → continuous 폴백")
+                pan_speed, tilt_speed = self._absolute_to_continuous(pan, tilt)
+                threading.Thread(target=self._continuous_move, args=(pan_speed, tilt_speed, zoom), daemon=True).start()
+                return True
             threading.Thread(target=self._absolute_move, args=(pan, tilt, zoom), daemon=True).start()
         else:
             threading.Thread(target=self._continuous_move, args=(pan, tilt, zoom), daemon=True).start()
@@ -212,6 +222,27 @@ class UnifiedPTZController:
             requests.put(url, data=xml_data, auth=self._hikvision_auth, timeout=1)
         except Exception as e:
             logger.error(f"[PTZ] AbsoluteMove 오류: {e}")
+
+    @staticmethod
+    def _absolute_to_continuous(pan_deg: float, tilt_deg: float) -> tuple:
+        """절대각 요청을 ONVIF speed 명령으로 근사 변환."""
+        if pan_deg is None:
+            pan_deg = 0.0
+        if tilt_deg is None:
+            tilt_deg = 0.0
+
+        # DOA 기준: 0~360(시계방향). 카메라 전방(0도) 기준으로 -180~180 오차로 변환.
+        pan_error = ((float(pan_deg) + 180.0) % 360.0) - 180.0
+
+        # 단순 P 제어로 속도화(안전 clip)
+        pan_speed = max(-0.6, min(0.6, pan_error / 90.0))
+        tilt_speed = max(-0.35, min(0.35, float(tilt_deg) / 90.0))
+        return pan_speed, tilt_speed
+
+    @property
+    def supports_absolute(self) -> bool:
+        """Hikvision absolute 제어 가능 여부."""
+        return self._hikvision_auth is not None
 
     def stop(self) -> None:
         """PTZ 정지"""
