@@ -156,6 +156,7 @@ def build_system(config: dict, args) -> tuple:
         "camera_user": cam_cfg.get("user", ""),
         "camera_password": cam_cfg.get("password", ""),
         "control_mode": ptz_cfg.get("control_mode", "onvif"),
+        "priority_hold_sec": ptz_cfg.get("priority_hold_sec", 0.7),
     })
     ptz.initialize()
 
@@ -175,6 +176,12 @@ def build_system(config: dict, args) -> tuple:
             dead_zone=ptz_cfg.get("dead_zone_pixels", 50),
             patrol_speed=ptz_cfg.get("patrol_speed", 0.2),
             target_classes=yolo_cfg.get("target_classes"),
+            camera_fov_deg=yolo_cfg.get("camera_fov_deg", 90.0),
+            doa_boost_weight=yolo_cfg.get("doa_boost_weight", 0.35),
+            doa_memory_sec=yolo_cfg.get("doa_memory_sec", 1.5),
+            doa_offset_deg=yolo_cfg.get("doa_offset_deg", 0.0),
+            doa_match_window_deg=yolo_cfg.get("doa_match_window_deg", 45.0),
+            emit_doa_candidate=yolo_cfg.get("emit_doa_candidate", True),
         )
         orch.register(yolo_module)
 
@@ -206,6 +213,7 @@ def build_system(config: dict, args) -> tuple:
             pause_threshold=stt_cfg.get("pause_threshold", 3.0),
             phrase_time_limit=stt_cfg.get("phrase_time_limit", 15.0),
             dynamic_threshold=stt_cfg.get("dynamic_threshold", True),
+            device_index=stt_cfg.get("device_index"),
         )
         if orch.register(stt_module):
             stt_module.start_listening()
@@ -288,6 +296,8 @@ def run_main_loop(orch: Orchestrator, stream: SharedStreamManager, config: dict,
     display_stt_time = 0.0
     display_llm = {}
     display_doa_angle = -1
+    display_doa_candidate = {}
+    display_doa_candidate_time = 0.0
     display_yolo_objects = []   # YOLO 결과를 프레임 간 유지
     display_yolo_mode = "N/A"   # YOLO 모드를 프레임 간 유지
 
@@ -309,9 +319,15 @@ def run_main_loop(orch: Orchestrator, stream: SharedStreamManager, config: dict,
         nonlocal display_doa_angle
         display_doa_angle = event.data.get("sector_angle", -1)
 
+    def on_doa_candidate_display(event: Event):
+        nonlocal display_doa_candidate, display_doa_candidate_time
+        display_doa_candidate = event.data or {}
+        display_doa_candidate_time = time.time()
+
     event_bus = orch.event_bus
     event_bus.subscribe("stt.text_recognized", on_stt_display)
     event_bus.subscribe("mic.doa_detected", on_doa_display)
+    event_bus.subscribe("yolo.doa_candidate", on_doa_candidate_display)
 
     try:
         while True:
@@ -402,6 +418,29 @@ def run_main_loop(orch: Orchestrator, stream: SharedStreamManager, config: dict,
                     # DOA 텍스트만 표시 (마이크 모듈 없어도 이벤트 수신 가능)
                     cv2.putText(display_frame, f"DOA: {display_doa_angle} deg",
                                 (10, h - 90), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 200, 0), 1)
+
+                # ── 3-1. 음성 근원지 추정 후보 강조 (최대 2초 유지) ──
+                if display_doa_candidate and (time.time() - display_doa_candidate_time < 2.0):
+                    target = display_doa_candidate.get("target", {})
+                    box = target.get("box")
+                    if box and len(box) == 4:
+                        x1, y1, x2, y2 = [int(v) for v in box]
+                        cv2.rectangle(display_frame, (x1, y1), (x2, y2), (255, 0, 255), 3)
+
+                        label = (
+                            f"AUDIO CAND | align:{target.get('doa_alignment', 0.0):.2f} "
+                            f"err:{target.get('doa_error_deg', 0.0):.1f}deg"
+                        )
+                        cv2.putText(display_frame, label, (x1, max(20, y1 - 12)),
+                                    cv2.FONT_HERSHEY_SIMPLEX, 0.45, (255, 0, 255), 2)
+
+                    # 상단 상태 텍스트 (박스 없는 경우에도 확인 가능)
+                    doa_text = (
+                        f"AudioCandidate: {target.get('name', 'N/A')} "
+                        f"(bonus:{target.get('doa_bonus', 0.0):.2f})"
+                    )
+                    cv2.putText(display_frame, doa_text, (180, 55),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 100, 255), 1)
 
                 # ── 4. 하단 패널 (STT + LLM 결과) ──
                 panel_h = 100

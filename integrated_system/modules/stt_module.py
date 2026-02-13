@@ -57,6 +57,7 @@ class STTModule(BaseModule):
         phrase_time_limit: float = 15.0,
         dynamic_threshold: bool = True,
         min_audio_duration: float = 0.3,
+        device_index: Optional[int] = None,
     ):
         """
         Args:
@@ -75,6 +76,7 @@ class STTModule(BaseModule):
         self.phrase_time_limit = phrase_time_limit
         self.dynamic_threshold = dynamic_threshold
         self.min_audio_duration = min_audio_duration
+        self.device_index = device_index
 
         # 런타임 상태
         self._recognizer = None
@@ -109,7 +111,10 @@ class STTModule(BaseModule):
             self._recognizer.dynamic_energy_threshold = self.dynamic_threshold
 
             # 마이크 오픈 테스트 + 주변 소음 보정
-            self._microphone = sr.Microphone()
+            if self.device_index is not None:
+                self._microphone = sr.Microphone(device_index=self.device_index)
+            else:
+                self._microphone = sr.Microphone()
             with self._microphone as source:
                 logger.info("[STT] 주변 소음 보정 중 (1초)...")
                 self._recognizer.adjust_for_ambient_noise(source, duration=1)
@@ -121,7 +126,8 @@ class STTModule(BaseModule):
             logger.info(
                 f"[STT] 초기화 완료 "
                 f"(언어: {self.language}, "
-                f"에너지 임계값: {self._recognizer.energy_threshold:.0f})"
+                f"에너지 임계값: {self._recognizer.energy_threshold:.0f}, "
+                f"device_index: {self.device_index if self.device_index is not None else 'default'})"
             )
 
             # MicArray DOA 이벤트 구독 (선택)

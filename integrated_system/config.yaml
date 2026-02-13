@@ -17,7 +17,8 @@ camera:
 # PTZ 제어 설정
 # -----------------------------------------------------------
 ptz:
-  control_mode: "onvif"             # "onvif" | "hikvision_http" | "both"
+  control_mode: "both"              # "onvif" | "hikvision_http" | "both" (DOA absolute 사용 시 both 권장)
+  priority_hold_sec: 0.7             # 우선순위 제어권 유지 시간 (낮추면 MIC/YOLO 교대 반응성 증가)
   pid_kp: 0.4                       # PID 추적 속도 계수
   dead_zone_pixels: 50              # 중심 데드존 (px)
   patrol_speed: 0.2                 # 순찰 모드 속도
@@ -31,6 +32,12 @@ yolo:
   confidence: 0.3                   # 최소 확신도
   target_classes: null              # null=모든 클래스, [0]=사람만
   patrol_return_delay: 3.0          # 순찰 복귀 딜레이 (초)
+  camera_fov_deg: 90.0              # 카메라 수평 FOV(도) - DOA/객체 정렬 계산에 사용
+  doa_offset_deg: 0.0               # 마이크 DOA 기준축→카메라 전방 기준축 보정값(도)
+  doa_match_window_deg: 45.0        # DOA 정렬로 인정할 허용각(도) - 좁을수록 엄격
+  doa_boost_weight: 0.35            # DOA 정렬 보너스 가중치
+  doa_memory_sec: 1.5               # 최근 DOA를 타겟 점수에 반영하는 유지 시간
+  emit_doa_candidate: true          # 음성 근원지 추정 후보(yolo.doa_candidate) 이벤트 발행
 
 # -----------------------------------------------------------
 # 마이크 어레이 (ReSpeaker) 설정
@@ -59,6 +66,7 @@ context_llm:
 stt:
   enabled: true
   language: "ko-KR"                 # 인식 언어 (한국어)
+  device_index: null                # null=시스템 기본, 숫자 지정 시 특정 마이크 장치 고정
   energy_threshold: 400             # 음성 감지 에너지 임계값 (낮을수록 민감)
   pause_threshold: 3.0              # 문장 끝 판단 무음 시간 (초)
   phrase_time_limit: 15.0           # 최대 발화 시간 (초)
