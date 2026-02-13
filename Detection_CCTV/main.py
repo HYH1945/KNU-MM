@@ -11,7 +11,8 @@ from services import (
     PTZCameraManager, 
     VisionProcessor, 
     VisualPriorityManager,
-    ReIDManager 
+    ReIDManager,
+    HeatmapOverlay,
 )
 
 class SurveillanceSystemController:
@@ -37,6 +38,14 @@ class SurveillanceSystemController:
         )
         self.priority_manager = VisualPriorityManager()
         self.reid_manager = ReIDManager(similarity_threshold=0.75)
+        self.heatmap = HeatmapOverlay(
+            alpha=self.config.HEATMAP_ALPHA,
+            decay=self.config.HEATMAP_DECAY,
+            radius=self.config.HEATMAP_RADIUS,
+            intensity=self.config.HEATMAP_INTENSITY,
+            downscale=self.config.HEATMAP_DOWNSCALE,
+            min_value=self.config.HEATMAP_MIN_VALUE,
+        ) if self.config.SHOW_HEATMAP else None
         
         # 시스템 상태 변수
         self.is_running: bool = True
@@ -160,7 +169,8 @@ class SurveillanceSystemController:
                     last_fps_time = time.perf_counter()
 
                 self.frame_count += 1
-                if self.frame_count % self.skip_frames == 0:
+                did_infer = (self.frame_count % self.skip_frames == 0)
+                if did_infer:
                     # 1. AI 인지 (YOLO + Re-ID)
                     raw_objects, _ = self.vision.process_frame(frame)
                     identified_objects = self.reid_manager.update_ids(frame, raw_objects)
@@ -216,6 +226,9 @@ class SurveillanceSystemController:
                 mode_label = self.current_mode
                 if manual_override_active:
                     mode_label = f"{self.current_mode} [MANUAL]"
+                if self.heatmap:
+                    self.heatmap.update(frame, sorted_objects, add_points=did_infer)
+                    frame = self.heatmap.apply(frame)
                 self._draw_overlay(
                     frame,
                     sorted_objects,
