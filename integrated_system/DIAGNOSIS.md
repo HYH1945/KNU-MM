@@ -207,3 +207,8 @@
 5. **기본 설정 보강**
    - `ptz.control_mode: both` 권장값 반영.
    - DOA 융합 파라미터(`camera_fov_deg`, `doa_boost_weight`, `doa_memory_sec`) 추가.
+
+6. **현실적 보정 파라미터 추가(정밀도 개선용)**
+   - `doa_offset_deg`: 마이크 기준축과 카메라 전방축의 설치 오차 보정.
+   - `doa_match_window_deg`: DOA 정렬 인정 각도(너무 넓거나 좁은 문제 완화).
+   - `emit_doa_candidate`: 음성 근원지 추정 객체를 별도 이벤트(`yolo.doa_candidate`)로 발행.

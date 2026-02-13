@@ -179,6 +179,9 @@ def build_system(config: dict, args) -> tuple:
             camera_fov_deg=yolo_cfg.get("camera_fov_deg", 90.0),
             doa_boost_weight=yolo_cfg.get("doa_boost_weight", 0.35),
             doa_memory_sec=yolo_cfg.get("doa_memory_sec", 1.5),
+            doa_offset_deg=yolo_cfg.get("doa_offset_deg", 0.0),
+            doa_match_window_deg=yolo_cfg.get("doa_match_window_deg", 45.0),
+            emit_doa_candidate=yolo_cfg.get("emit_doa_candidate", True),
         )
         orch.register(yolo_module)
 

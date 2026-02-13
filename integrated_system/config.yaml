@@ -33,8 +33,11 @@ yolo:
   target_classes: null              # null=모든 클래스, [0]=사람만
   patrol_return_delay: 3.0          # 순찰 복귀 딜레이 (초)
   camera_fov_deg: 90.0              # 카메라 수평 FOV(도) - DOA/객체 정렬 계산에 사용
+  doa_offset_deg: 0.0               # 마이크 DOA 기준축→카메라 전방 기준축 보정값(도)
+  doa_match_window_deg: 45.0        # DOA 정렬로 인정할 허용각(도) - 좁을수록 엄격
   doa_boost_weight: 0.35            # DOA 정렬 보너스 가중치
   doa_memory_sec: 1.5               # 최근 DOA를 타겟 점수에 반영하는 유지 시간
+  emit_doa_candidate: true          # 음성 근원지 추정 후보(yolo.doa_candidate) 이벤트 발행
 
 # -----------------------------------------------------------
 # 마이크 어레이 (ReSpeaker) 설정

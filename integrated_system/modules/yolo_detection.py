@@ -57,6 +57,9 @@ class YOLODetectionModule(BaseModule):
         camera_fov_deg: float = 90.0,
         doa_boost_weight: float = 0.35,
         doa_memory_sec: float = 1.5,
+        doa_offset_deg: float = 0.0,
+        doa_match_window_deg: float = 45.0,
+        emit_doa_candidate: bool = True,
     ):
         super().__init__(event_bus)
         self.ptz = ptz
@@ -69,6 +72,9 @@ class YOLODetectionModule(BaseModule):
         self.camera_fov_deg = camera_fov_deg
         self.doa_boost_weight = doa_boost_weight
         self.doa_memory_sec = doa_memory_sec
+        self.doa_offset_deg = doa_offset_deg
+        self.doa_match_window_deg = max(1.0, doa_match_window_deg)
+        self.emit_doa_candidate = emit_doa_candidate
 
         # ── 원본 서비스 인스턴스 (initialize에서 생성) ──
         self._vision = None           # VisionProcessor   (vision_processor.py)
@@ -146,6 +152,8 @@ class YOLODetectionModule(BaseModule):
 
         # 5. 이벤트 발행
         if sorted_objects:
+            if self.emit_doa_candidate:
+                self._emit_doa_candidate(sorted_objects)
             self.emit("yolo.objects_detected", {
                 "objects": sorted_objects,
                 "count": len(sorted_objects),
@@ -190,18 +198,47 @@ class YOLODetectionModule(BaseModule):
             rel = (float(cx) / float(frame_width)) - 0.5
             obj_angle = rel * self.camera_fov_deg
 
-            doa_error = ((self._latest_doa_angle - obj_angle + 180.0) % 360.0) - 180.0
+            # 설치 오차 보정: 마이크 기준 방위를 카메라 전방 기준으로 보정
+            doa_calibrated = (self._latest_doa_angle + self.doa_offset_deg) % 360.0
+            doa_error = ((doa_calibrated - obj_angle + 180.0) % 360.0) - 180.0
             doa_error_abs = abs(doa_error)
-            alignment = max(0.0, 1.0 - min(doa_error_abs, half_fov) / half_fov)
+            alignment = max(0.0, 1.0 - min(doa_error_abs, self.doa_match_window_deg) / self.doa_match_window_deg)
             bonus = self.doa_boost_weight * alignment
 
             base = float(obj.get("priority_score", 0.0))
             obj["priority_score"] = base + bonus
             obj["doa_bonus"] = bonus
+            obj["doa_error_deg"] = float(doa_error)
+            obj["doa_alignment"] = float(alignment)
             fused.append(obj)
 
         fused.sort(key=lambda o: o.get("priority_score", 0.0), reverse=True)
         return fused
+
+    def _emit_doa_candidate(self, sorted_objects: List[Dict]) -> None:
+        """DOA와 가장 정렬된 후보 객체를 별도 이벤트로 발행."""
+        if not sorted_objects:
+            return
+        top = sorted_objects[0]
+        doa_bonus = float(top.get("doa_bonus", 0.0))
+        doa_alignment = float(top.get("doa_alignment", 0.0))
+        if doa_bonus <= 0.0:
+            return
+
+        self.emit("yolo.doa_candidate", {
+            "target": {
+                "id": top.get("permanent_id"),
+                "name": top.get("display_name", top.get("name", "unknown")),
+                "box": top.get("box"),
+                "center": top.get("center"),
+                "priority_score": float(top.get("priority_score", 0.0)),
+                "doa_bonus": doa_bonus,
+                "doa_alignment": doa_alignment,
+                "doa_error_deg": float(top.get("doa_error_deg", 0.0)),
+            },
+            "doa_angle": self._latest_doa_angle,
+            "doa_age_sec": time.time() - self._latest_doa_time,
+        }, priority=1)
 
     # ─── 상태 머신 + PTZ (통합 레이어 — Detaction_CCTV/main.py 참조) ───
 
