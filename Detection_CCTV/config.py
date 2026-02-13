@@ -40,5 +40,14 @@ class AppConfig:
     ENABLE_MANUAL_CONTROL: bool = _env_bool("ENABLE_MANUAL_CONTROL", "1")
     MANUAL_OVERRIDE_SECONDS: float = float(os.getenv("MANUAL_OVERRIDE_SECONDS", "0.0"))
 
+    # Heatmap overlay
+    SHOW_HEATMAP: bool = _env_bool("SHOW_HEATMAP", "1")
+    HEATMAP_ALPHA: float = float(os.getenv("HEATMAP_ALPHA", "0.35"))
+    HEATMAP_DECAY: float = float(os.getenv("HEATMAP_DECAY", "0.94"))
+    HEATMAP_RADIUS: int = int(os.getenv("HEATMAP_RADIUS", "24"))
+    HEATMAP_INTENSITY: float = float(os.getenv("HEATMAP_INTENSITY", "1.0"))
+    HEATMAP_DOWNSCALE: int = int(os.getenv("HEATMAP_DOWNSCALE", "2"))
+    HEATMAP_MIN_VALUE: float = float(os.getenv("HEATMAP_MIN_VALUE", "0.01"))
+
     # PTZ
     PTZ_LOG_ERRORS: bool = _env_bool("PTZ_LOG_ERRORS", "0")
