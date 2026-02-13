@@ -1,0 +1,30 @@
+# KNU-MM Integrated Multimodal Monitoring System
+# pip install -r requirements.txt
+
+# --- Common Dependencies ---
+opencv-python>=4.8.0
+numpy>=1.24.0
+PyYAML>=6.0
+python-dotenv>=1.0.0
+requests>=2.31.0
+
+# --- YOLO Object Detection (Detaction_CCTV) ---
+ultralytics>=8.0.0
+torch>=2.0.0
+
+# --- PTZ Camera Control ---
+onvif-zeep>=0.2.12
+
+# --- Microphone Array (mic_array_Control) ---
+pyusb>=1.2.1
+# (ReSpeaker v2 only - Linux/macOS only)
+
+# --- Context LLM ---
+openai>=1.0.0
+SpeechRecognition>=3.10.0
+pyaudio>=0.2.13
+tiktoken>=0.5.0
+
+# --- Optional Dependencies ---
+# flask>=3.0.0            # For web dashboard
+# flask-socketio>=5.3.0   # For web real-time communication

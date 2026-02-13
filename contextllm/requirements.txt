@@ -16,6 +16,7 @@ requests==2.32.5
 
 # REST API 서버
 flask==3.0.0
+flask-socketio>=5.3.0
 
 # OpenAI API 클라이언트 (ChatGPT 분석용)
 openai>=1.0.0
