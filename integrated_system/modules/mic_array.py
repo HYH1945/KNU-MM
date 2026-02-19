@@ -215,6 +215,40 @@ class MicArrayModule(BaseModule):
                         move_type="absolute",
                     )
 
+                    # ★ 카메라 도착 후 발화자 추정 ★
+                    doa_angle = float(sector)
+                    doa_conf = float(confidence)
+
+                    def _check_speaker():
+                        time.sleep(2.0)  # 카메라 도착 대기
+                        if not self._spatial_context:
+                            return
+                        matched = self._spatial_context.check_spatial_match()
+                        details = self._spatial_context.get_match_details()
+                        if matched and details.get("is_person"):
+                            logger.info(
+                                f"[MicArray] ★ 발화자 추정: {details['matched_object']}"
+                                f"(ID:{details['object_id']}) "
+                                f"DOA={doa_angle:.0f}° ↔ 객체={details['object_angle']:.0f}° "
+                                f"(차이: {details['angle_diff']:.0f}°)"
+                            )
+                            self.emit("mic.speaker_identified", {
+                                "doa_angle": doa_angle,
+                                "doa_confidence": doa_conf,
+                                **details,
+                            })
+                        else:
+                            logger.debug(
+                                f"[MicArray] DOA {doa_angle:.0f}° 방향에 "
+                                f"매칭되는 사람 없음"
+                            )
+                            self.emit("mic.doa_unmatched", {
+                                "doa_angle": doa_angle,
+                                "doa_confidence": doa_conf,
+                            })
+
+                    threading.Thread(target=_check_speaker, daemon=True).start()
+
     @staticmethod
     def _get_sector(raw_angle: float) -> int:
         """
