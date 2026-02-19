@@ -19,10 +19,13 @@ import os
 import sys
 import json
 import base64
+import logging
 from datetime import datetime
 from pathlib import Path
 from typing import Optional, Dict, Any, Union
 import numpy as np
+
+logger = logging.getLogger(__name__)
 
 try:
     from openai import OpenAI
@@ -133,9 +136,21 @@ class MultimodalAnalyzer:
         self.client = OpenAI(api_key=self.api_key)
         
         # 음성 특성 분석기 초기화 (config에서 설정 확인)
-        analysis_cfg = get_config('analysis', default={})
-        self.use_voice_characteristics = analysis_cfg.get('voice_characteristics', True)
-        self.use_streaming = analysis_cfg.get('streaming', False)
+        analysis_cfg = get_config('analysis', default={}) or {}
+        voice_cfg = get_config('voice_characteristics', default={}) or {}
+        streaming_cfg = get_config('streaming', default={}) or {}
+
+        analysis_voice = analysis_cfg.get('voice_characteristics')
+        legacy_voice = voice_cfg.get('enabled')
+        self.use_voice_characteristics = analysis_voice if analysis_voice is not None else legacy_voice
+        if self.use_voice_characteristics is None:
+            self.use_voice_characteristics = True
+
+        analysis_streaming = analysis_cfg.get('streaming')
+        legacy_streaming = streaming_cfg.get('enabled')
+        self.use_streaming = analysis_streaming if analysis_streaming is not None else legacy_streaming
+        if self.use_streaming is None:
+            self.use_streaming = False
         
         if VOICE_ANALYSIS_AVAILABLE and self.use_voice_characteristics:
             self.voice_analyzer = VoiceCharacteristicsAnalyzer()
@@ -149,6 +164,7 @@ class MultimodalAnalyzer:
         self.max_tokens = get_openai_config('max_tokens', default=800)
         self.temperature = get_openai_config('temperature', default=0.3)
         self.image_detail = get_openai_config('image_detail', default='low')
+        self.timeout = get_openai_config('timeout', default=30)
     
     def encode_image_to_base64(self, image_source: Union[str, np.ndarray], max_size: int = 1024) -> str:
         """
@@ -284,7 +300,8 @@ class MultimodalAnalyzer:
                     messages=messages,
                     max_tokens=self.max_tokens,
                     temperature=self.temperature,
-                    stream=True
+                    stream=True,
+                    timeout=self.timeout,
                 )
                 for chunk in response:
                     if chunk.choices[0].delta.content:
@@ -297,7 +314,8 @@ class MultimodalAnalyzer:
                     model=self.model,
                     messages=messages,
                     max_tokens=self.max_tokens,
-                    temperature=self.temperature
+                    temperature=self.temperature,
+                    timeout=self.timeout,
                 )
                 content = response.choices[0].message.content
             
@@ -351,7 +369,7 @@ class MultimodalAnalyzer:
             return result
         
         except Exception as e:
-            print(f"❌ 멀티모달 분석 오류: {e}")
+            logger.exception("Multimodal analysis failed")
             return {
                 'error': str(e),
                 'context': '분석 실패',

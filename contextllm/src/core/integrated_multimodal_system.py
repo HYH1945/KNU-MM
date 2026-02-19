@@ -18,6 +18,7 @@
 import os
 import sys
 import json
+import logging
 import cv2
 import numpy as np
 import threading
@@ -28,6 +29,8 @@ from pathlib import Path
 from typing import Optional, Dict, Any, List, Tuple, Callable
 from dataclasses import dataclass
 from concurrent.futures import ThreadPoolExecutor, as_completed
+
+logger = logging.getLogger(__name__)
 
 # config 로드
 try:
@@ -74,6 +77,16 @@ except ImportError:
         MULTIMODAL_ANALYZER_AVAILABLE = True
     except ImportError:
         MULTIMODAL_ANALYZER_AVAILABLE = False
+
+try:
+    from core.sound_event_detector import SoundEventDetector
+    SOUND_EVENT_DETECTOR_AVAILABLE = True
+except ImportError:
+    try:
+        from sound_event_detector import SoundEventDetector
+        SOUND_EVENT_DETECTOR_AVAILABLE = True
+    except ImportError:
+        SOUND_EVENT_DETECTOR_AVAILABLE = False
 
 
 @dataclass
@@ -989,15 +1002,16 @@ class SpeechDetector:
                     text = self.recognizer.recognize_google(audio, language=language)
                     return text, audio
                 except sr.UnknownValueError:
-                    # 음성은 감지됐지만 인식 불가
-                    return None, None
+                    # 음성/소리는 감지됐으나 텍스트 인식 불가 -> 비음성 이벤트 검출을 위해 오디오 반환
+                    return None, audio
                 except sr.RequestError as e:
-                    print(f"❌ 음성 인식 API 오류: {e}")
+                    logger.warning("Speech recognition request failed: %s", e)
                     return None, None
         
         except sr.WaitTimeoutError:
             return None, None
         except Exception as e:
+            logger.debug("listen_and_recognize failed: %s", e)
             return None, None
     
     def start_background_listening(self, language: str = "ko-KR"):
@@ -1040,12 +1054,13 @@ class SpeechDetector:
                             # 큐에 추가 (메인 루프에서 꺼낼 수 있음)
                             self._bg_audio_queue.put((text, audio))
                         except sr.UnknownValueError:
-                            pass
-                        except sr.RequestError:
-                            pass
+                            # 비음성/짧은 발화도 사운드 이벤트 감지 경로로 전달
+                            self._bg_audio_queue.put((None, audio))
+                        except sr.RequestError as e:
+                            logger.warning("Background speech recognition request failed: %s", e)
                 
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug("Background speech worker error: %s", e)
         
         # 백그라운드 스레드 시작
         bg_thread = threading.Thread(target=background_worker, daemon=True)
@@ -1063,7 +1078,7 @@ class SpeechDetector:
         
         try:
             return self._bg_audio_queue.get_nowait()
-        except:
+        except queue.Empty:
             return None, None
     
     def stop_background_listening(self):
@@ -1106,12 +1121,13 @@ class SpeechDetector:
                 except sr.UnknownValueError:
                     return None, None
                 except sr.RequestError as e:
-                    print(f"❌ 음성 인식 API 오류: {e}")
+                    logger.warning("Continuous speech recognition request failed: %s", e)
                     return None, None
         
         except sr.WaitTimeoutError:
             return None, None
         except Exception as e:
+            logger.debug("listen_continuous failed: %s", e)
             return None, None
         """
         음성이 감지될 때까지 대기
@@ -1162,6 +1178,7 @@ class SpeechDetector:
         except sr.UnknownValueError:
             return None
         except sr.RequestError as e:
+            logger.warning("Speech recognition request failed: %s", e)
             return None
     
     def save_audio_to_wav(self, audio: Any, output_path: str) -> str:
@@ -1193,7 +1210,8 @@ class IntegratedMultimodalSystem:
         downsampling_config: DownsamplingConfig = None,
         log_dir: str = None,
         energy_threshold: int = 400,
-        dynamic_threshold: bool = False
+        dynamic_threshold: bool = False,
+        enable_speech: bool = True,
     ):
         """
         통합 멀티모달 시스템 초기화
@@ -1205,6 +1223,7 @@ class IntegratedMultimodalSystem:
             log_dir: 로그 저장 디렉토리
             energy_threshold: 음성 감지 에너지 임계값 (낮을수록 민감함)
             dynamic_threshold: 동적 에너지 임계값 여부 (False=고정/스피커소리용, True=자동/마이크용)
+            enable_speech: 음성 감지기 초기화 여부 (False면 영상 전용 모드)
         """
         self.camera_id = camera_id
         self.model = model
@@ -1212,16 +1231,27 @@ class IntegratedMultimodalSystem:
         
         # 분석 설정 로드
         self.analysis_config = get_config('analysis', default={}) or {}
-        self.use_voice_characteristics = self.analysis_config.get('voice_characteristics', True)
+        self.voice_analysis_config = get_config('voice_analysis', default={}) or {}
+        self.voice_characteristics_config = get_config('voice_characteristics', default={}) or {}
+        self.streaming_config = get_config('streaming', default={}) or {}
+        self.use_voice_characteristics, self.use_streaming = self._resolve_feature_toggles()
+        self.voice_thresholds = self._resolve_voice_threshold_config()
+        self.sound_event_config = get_config('sound_event', default={}) or {}
+        self.use_sound_event_detection = self.sound_event_config.get('enabled', True)
         
         # 컴포넌트 초기화
         self.video_manager = VideoCaptureManager(camera_id)
         self.downsampler = VideoDownsampler(self.downsampling_config)
-        self.speech_detector = SpeechDetector(energy_threshold=energy_threshold, dynamic_threshold=dynamic_threshold)
+        self.enable_speech = enable_speech
+        self.speech_detector = self._init_speech_detector(energy_threshold, dynamic_threshold, enable_speech)
         
         # 멀티모달 분석기
         if MULTIMODAL_ANALYZER_AVAILABLE:
-            self.multimodal_analyzer = MultimodalAnalyzer(model=model)
+            try:
+                self.multimodal_analyzer = MultimodalAnalyzer(model=model)
+            except Exception as e:
+                logger.warning("Multimodal analyzer initialization failed: %s", e)
+                self.multimodal_analyzer = None
         else:
             self.multimodal_analyzer = None
         
@@ -1230,6 +1260,17 @@ class IntegratedMultimodalSystem:
             self.voice_characteristics_analyzer = VoiceCharacteristicsAnalyzer()
         else:
             self.voice_characteristics_analyzer = None
+
+        # 비음성 이벤트 감지기 (YAMNet)
+        self.sound_event_detector = None
+        if SOUND_EVENT_DETECTOR_AVAILABLE and self.use_sound_event_detection:
+            self.sound_event_detector = SoundEventDetector(
+                model_url=self.sound_event_config.get('model_url', 'https://tfhub.dev/google/yamnet/1'),
+                min_confidence=self.sound_event_config.get('min_confidence', 0.12),
+                trigger_threshold=self.sound_event_config.get('trigger_threshold', 0.25),
+                top_k=self.sound_event_config.get('top_k', 5),
+                emergency_keywords=self.sound_event_config.get('emergency_keywords', []),
+            )
         
         # 모니터링 상태
         self.is_monitoring = False
@@ -1250,6 +1291,62 @@ class IntegratedMultimodalSystem:
         self.use_opencv_display = False
         self.opencv_display = None
         self.use_web_dashboard = False
+
+    def _resolve_feature_toggles(self) -> Tuple[bool, bool]:
+        """레거시/신규 설정 키를 모두 지원해 기능 토글 결정"""
+        analysis_voice = self.analysis_config.get('voice_characteristics')
+        legacy_voice = self.voice_characteristics_config.get('enabled')
+
+        if analysis_voice is None and legacy_voice is not None:
+            logger.warning("Deprecated config key `voice_characteristics.enabled` in use. Prefer `analysis.voice_characteristics`.")
+        if analysis_voice is not None and legacy_voice is not None and analysis_voice != legacy_voice:
+            logger.warning("Config mismatch: `analysis.voice_characteristics` overrides `voice_characteristics.enabled`.")
+
+        use_voice_characteristics = analysis_voice if analysis_voice is not None else legacy_voice
+        if use_voice_characteristics is None:
+            use_voice_characteristics = True
+
+        analysis_streaming = self.analysis_config.get('streaming')
+        legacy_streaming = self.streaming_config.get('enabled')
+        if analysis_streaming is None and legacy_streaming is not None:
+            logger.warning("Deprecated config key `streaming.enabled` in use. Prefer `analysis.streaming`.")
+        if analysis_streaming is not None and legacy_streaming is not None and analysis_streaming != legacy_streaming:
+            logger.warning("Config mismatch: `analysis.streaming` overrides `streaming.enabled`.")
+
+        use_streaming = analysis_streaming if analysis_streaming is not None else legacy_streaming
+        if use_streaming is None:
+            use_streaming = False
+
+        return bool(use_voice_characteristics), bool(use_streaming)
+
+    def _resolve_voice_threshold_config(self) -> Dict[str, Any]:
+        """임계값 설정은 `voice_analysis` 루트 키를 기본으로 사용하고 하위 호환 유지"""
+        legacy_voice_cfg = self.analysis_config.get('voice_analysis', {}) or {}
+        if legacy_voice_cfg and self.voice_analysis_config:
+            logger.warning("Config mismatch: both `voice_analysis` and `analysis.voice_analysis` found. Using `voice_analysis`.")
+        return self.voice_analysis_config or legacy_voice_cfg
+
+    def _init_speech_detector(self, energy_threshold: int, dynamic_threshold: bool, enable_speech: bool) -> Optional[SpeechDetector]:
+        """음성 감지기는 필요할 때만 초기화하여 영상-only 경로를 분리"""
+        if not enable_speech:
+            return None
+
+        if not SPEECH_RECOGNITION_AVAILABLE:
+            logger.warning("SpeechRecognition is not available; speech-triggered modes are disabled.")
+            return None
+
+        try:
+            return SpeechDetector(energy_threshold=energy_threshold, dynamic_threshold=dynamic_threshold)
+        except Exception as e:
+            logger.warning("SpeechDetector initialization failed: %s", e)
+            return None
+
+    def _require_speech_detector(self) -> bool:
+        """음성 기반 모드에서 필수인 감지기 존재 여부 확인"""
+        if self.speech_detector is not None:
+            return True
+        logger.warning("Speech detector is unavailable. Install SpeechRecognition/PyAudio or run a video-only mode.")
+        return False
     
     # ==================== 디스플레이 설정 메서드 ====================
     
@@ -1447,6 +1544,7 @@ class IntegratedMultimodalSystem:
             return result
         
         except Exception as e:
+            logger.exception("analyze_video_only failed")
             result["error"] = str(e)
             return result
     
@@ -1498,6 +1596,8 @@ class IntegratedMultimodalSystem:
             "timestamp": datetime.now().isoformat(),
             "success": False,
             "speech_detected": False,
+            "sound_event": None,
+            "trigger_source": None,
             "transcribed_text": None,
             "voice_characteristics": None,
             "video_analysis": None,
@@ -1506,6 +1606,10 @@ class IntegratedMultimodalSystem:
         }
         
         try:
+            if not self._require_speech_detector():
+                result["error"] = "음성 감지기가 비활성화되었습니다. SpeechRecognition/PyAudio 설치 후 재시도하세요."
+                return result
+
             # 1. 카메라 미리 열어두기
             if not self.video_manager.open():
                 result["error"] = "카메라를 열 수 없습니다"
@@ -1516,16 +1620,33 @@ class IntegratedMultimodalSystem:
             transcribed_text, audio = self.speech_detector.listen_and_recognize(
                 phrase_time_limit=phrase_time_limit
             )
-            
-            # 텍스트가 인식되지 않으면 다음 루프로
-            if not transcribed_text:
+
+            # 비음성 이벤트 분석 (YAMNet)
+            sound_event = self._analyze_sound_event(audio)
+            result["sound_event"] = sound_event
+
+            has_speech = bool(transcribed_text)
+            has_sound_trigger = bool(sound_event and sound_event.get("triggered", False))
+
+            if not has_speech and not has_sound_trigger:
                 return result
-            
-            result["speech_detected"] = True
+
+            result["speech_detected"] = has_speech
             result["transcribed_text"] = transcribed_text
+            if has_speech and has_sound_trigger:
+                result["trigger_source"] = "speech+sound_event"
+            elif has_speech:
+                result["trigger_source"] = "speech"
+            else:
+                result["trigger_source"] = "sound_event"
             
             # 3. 문장이 인식됨! 이 순간 영상 캡처
-            print(f"🎤 \"{transcribed_text}\"")
+            if has_speech:
+                print(f"🎤 \"{transcribed_text}\"")
+            else:
+                top_event = (sound_event or {}).get("top_event", "unknown")
+                top_conf = (sound_event or {}).get("top_confidence", 0.0)
+                print(f"🔊 비음성 이벤트 감지: {top_event} ({top_conf:.2f})")
             print("📸 영상 캡처 중...")
             
             # 현재 프레임 캡처 (이미지 1장)
@@ -1541,7 +1662,7 @@ class IntegratedMultimodalSystem:
             audio_path = None
             voice_features = None
             
-            if audio and self.voice_characteristics_analyzer:
+            if has_speech and audio and self.voice_characteristics_analyzer:
                 import tempfile
                 temp_audio_file = tempfile.NamedTemporaryFile(
                     suffix='.wav', 
@@ -1557,18 +1678,23 @@ class IntegratedMultimodalSystem:
                 result["voice_characteristics"] = voice_features
             
             # 5. 멀티모달 분석 (음성 텍스트 + 영상)
-            if transcribed_text and video_frames and self.multimodal_analyzer:
+            if video_frames and self.multimodal_analyzer:
                 print("🔍 멀티모달 분석 중...")
                 
                 representative_frame = video_frames[0]
                 
                 # 음성 특성 정보를 추가 컨텍스트로 전달
-                additional_context = None
+                additional_context_parts = []
                 if voice_features:
-                    additional_context = self._format_voice_features_context(voice_features)
+                    additional_context_parts.append(self._format_voice_features_context(voice_features))
+                if sound_event:
+                    additional_context_parts.append(self._format_sound_event_context(sound_event))
+                additional_context = "\n\n".join([ctx for ctx in additional_context_parts if ctx]) if additional_context_parts else None
+
+                analysis_text = transcribed_text if transcribed_text else "[음성 텍스트 없음] 비음성 위험 소리가 감지되었습니다."
                 
                 multimodal_result = self.multimodal_analyzer.analyze_with_image(
-                    audio_text=transcribed_text,
+                    audio_text=analysis_text,
                     image_source=representative_frame,
                     additional_context=additional_context,
                     audio_file_path=str(audio_path) if audio_path else None
@@ -1586,12 +1712,13 @@ class IntegratedMultimodalSystem:
             if audio_path and audio_path.exists():
                 try:
                     audio_path.unlink()
-                except:
-                    pass
+                except Exception as e:
+                    logger.warning("Failed to delete temp audio file %s: %s", audio_path, e)
             
             return result
         
         except Exception as e:
+            logger.exception("analyze_once failed")
             result["error"] = str(e)
             return result
     
@@ -1608,9 +1735,7 @@ class IntegratedMultimodalSystem:
                 "emergency_indicators": emergency_indicators
             }
         except Exception as e:
-            print(f"❌ 음성 특성 분석 오류: {e}")
-            return None
-        except Exception as e:
+            logger.exception("Voice characteristics analysis failed")
             return None
     
     def _calculate_voice_emergency_indicators(self, features: Dict) -> Dict[str, Any]:
@@ -1628,8 +1753,7 @@ class IntegratedMultimodalSystem:
         
         # voice_analysis 설정에서 임계값 읽기
         # self.config는 초기화 시 get_config로 받은 값
-        analysis_cfg = self.analysis_config  # 이미 저장된 config
-        voice_cfg = analysis_cfg.get('voice_analysis', {}) or {}
+        voice_cfg = self.voice_thresholds or {}
         
         pitch_cfg = voice_cfg.get('pitch', {})
         energy_cfg = voice_cfg.get('energy', {})
@@ -1700,6 +1824,39 @@ class IntegratedMultimodalSystem:
         frames, timestamps = self.downsampler.downsample_video_frames(frames, timestamps)
         
         return frames, timestamps
+
+    def _analyze_sound_event(self, audio: Any) -> Optional[Dict[str, Any]]:
+        """YAMNet 기반 비음성 이벤트 분석"""
+        if not audio or not self.sound_event_detector:
+            return None
+
+        try:
+            return self.sound_event_detector.detect_from_audio(audio)
+        except Exception as e:
+            logger.debug("Sound event detection failed: %s", e)
+            return None
+
+    def _format_sound_event_context(self, sound_event: Dict[str, Any]) -> str:
+        """사운드 이벤트 결과를 LLM 컨텍스트 문자열로 포맷"""
+        if not sound_event:
+            return ""
+
+        lines = ["**사운드 이벤트 분석 결과(YAMNet):**"]
+        top_event = sound_event.get("top_event")
+        top_conf = float(sound_event.get("top_confidence", 0.0) or 0.0)
+        if top_event:
+            lines.append(f"- 최상위 이벤트: {top_event} (신뢰도 {top_conf:.2f})")
+
+        emergency_events = sound_event.get("emergency_events", []) or []
+        if emergency_events:
+            lines.append("- 위험 이벤트 후보:")
+            for event in emergency_events[:3]:
+                lines.append(f"  - {event.get('label', 'unknown')} ({float(event.get('confidence', 0.0)):.2f})")
+        else:
+            lines.append("- 위험 이벤트 후보 없음")
+
+        lines.append(f"- 트리거 여부: {'예' if sound_event.get('triggered', False) else '아니오'}")
+        return "\n".join(lines)
     
     def _format_voice_features_context(self, voice_features: Dict) -> str:
         """음성 특성을 LLM 분석용 컨텍스트로 포맷"""
@@ -1790,7 +1947,8 @@ class IntegratedMultimodalSystem:
         self, 
         on_result: Callable[[Dict], None] = None,
         max_iterations: int = None,
-        verbose: bool = False
+        verbose: bool = False,
+        parallel: bool = False,
     ):
         """
         연속 모니터링 시작
@@ -1799,10 +1957,18 @@ class IntegratedMultimodalSystem:
             on_result: 결과 콜백 함수
             max_iterations: 최대 반복 횟수 (None이면 무한)
             verbose: 상세 출력 여부
+            parallel: 호환 옵션 (현재는 순차 처리와 동일)
         """
+        if not self._require_speech_detector():
+            raise RuntimeError("음성 감지기가 비활성화되어 모니터링을 시작할 수 없습니다.")
+
         self.on_result_callback = on_result
         self.is_monitoring = True
         self.verbose = verbose
+        self.parallel = parallel
+
+        if parallel:
+            logger.warning("`parallel` mode is currently mapped to sequential monitoring for compatibility.")
         
         # 카메라 미리 열기
         self.video_manager.open()
@@ -1821,7 +1987,8 @@ class IntegratedMultimodalSystem:
                 # 웹 비디오 스트리밍 비활성화 (localhost 접근 거부 이슈)
                 enable_video_stream(False)
                 self.web_video_streaming = False
-        except:
+        except Exception as e:
+            logger.debug("Web dashboard integration unavailable: %s", e)
             self.web_video_streaming = False
         
         self._start_monitoring_sequential(max_iterations)
@@ -1835,6 +2002,10 @@ class IntegratedMultimodalSystem:
         iteration = 0
         
         # 백그라운드 음성 감지 시작
+        if not self.speech_detector:
+            print("❌ 음성 감지기가 비활성화되어 모니터링을 진행할 수 없습니다.")
+            self.stop_monitoring()
+            return
         self.speech_detector.start_background_listening()
         
         try:
@@ -1845,8 +2016,18 @@ class IntegratedMultimodalSystem:
                 
                 # 비블로킹 - 감지된 음성이 있는지 확인
                 transcribed_text, audio = self.speech_detector.get_recognized_speech()
-                
-                if transcribed_text:
+
+                if audio is not None:
+                    sound_event = self._analyze_sound_event(audio)
+                    has_speech = bool(transcribed_text)
+                    has_sound_trigger = bool(sound_event and sound_event.get("triggered", False))
+
+                    if not has_speech and not has_sound_trigger:
+                        time.sleep(0.01)
+                        continue
+
+                    trigger_source = "speech+sound_event" if (has_speech and has_sound_trigger) else ("speech" if has_speech else "sound_event")
+
                     print("📸 영상 캡처 중...")
                     
                     # 현재 프레임 캡처
@@ -1855,7 +2036,7 @@ class IntegratedMultimodalSystem:
                         frame = self.downsampler.downsample_image(frame)
                     
                     # 분석 수행
-                    result = self._analyze_with_data(transcribed_text, audio, frame)
+                    result = self._analyze_with_data(transcribed_text, audio, frame, sound_event=sound_event, trigger_source=trigger_source)
                     
                     # 분석 결과 처리
                     if result.get("success"):
@@ -1881,15 +2062,25 @@ class IntegratedMultimodalSystem:
         
         finally:
             # 백그라운드 리스닝 중지
-            self.speech_detector.stop_background_listening()
+            if self.speech_detector:
+                self.speech_detector.stop_background_listening()
             self.stop_monitoring()
     
-    def _analyze_with_data(self, transcribed_text: str, audio: Any, frame: np.ndarray) -> Dict[str, Any]:
+    def _analyze_with_data(
+        self,
+        transcribed_text: Optional[str],
+        audio: Any,
+        frame: np.ndarray,
+        sound_event: Optional[Dict[str, Any]] = None,
+        trigger_source: Optional[str] = None,
+    ) -> Dict[str, Any]:
         """이미 캡처된 데이터로 분석 수행"""
         result = {
             "timestamp": datetime.now().isoformat(),
             "success": False,
-            "speech_detected": True,
+            "speech_detected": bool(transcribed_text),
+            "sound_event": sound_event,
+            "trigger_source": trigger_source,
             "transcribed_text": transcribed_text,
             "voice_characteristics": None,
             "video_analysis": None,
@@ -1905,7 +2096,7 @@ class IntegratedMultimodalSystem:
             audio_path = None
             voice_features = None
             
-            if audio:
+            if audio and transcribed_text:
                 if self.voice_characteristics_analyzer:
                     import tempfile
                     temp_audio_file = tempfile.NamedTemporaryFile(
@@ -1916,7 +2107,11 @@ class IntegratedMultimodalSystem:
                     )
                     audio_path = Path(temp_audio_file.name)
                     temp_audio_file.close()
-                    self.speech_detector.save_audio_to_wav(audio, str(audio_path))
+                    if self.speech_detector:
+                        self.speech_detector.save_audio_to_wav(audio, str(audio_path))
+                    else:
+                        logger.warning("Speech detector unavailable while trying to save audio.")
+                        audio_path = None
                     
                     voice_features = self._analyze_voice_characteristics(str(audio_path))
                     result["voice_characteristics"] = voice_features
@@ -1928,17 +2123,22 @@ class IntegratedMultimodalSystem:
                 print("⚠️  오디오 데이터 없음")
             
             # 멀티모달 분석
-            if transcribed_text and video_frames and self.multimodal_analyzer:
+            if video_frames and self.multimodal_analyzer:
                 print("🔍 멀티모달 분석 중...")
                 
                 representative_frame = video_frames[0]
                 
-                additional_context = None
+                additional_context_parts = []
                 if voice_features:
-                    additional_context = self._format_voice_features_context(voice_features)
+                    additional_context_parts.append(self._format_voice_features_context(voice_features))
+                if sound_event:
+                    additional_context_parts.append(self._format_sound_event_context(sound_event))
+                additional_context = "\n\n".join([ctx for ctx in additional_context_parts if ctx]) if additional_context_parts else None
+
+                analysis_text = transcribed_text if transcribed_text else "[음성 텍스트 없음] 비음성 위험 소리가 감지되었습니다."
                 
                 multimodal_result = self.multimodal_analyzer.analyze_with_image(
-                    audio_text=transcribed_text,
+                    audio_text=analysis_text,
                     image_source=representative_frame,
                     additional_context=additional_context,
                     audio_file_path=str(audio_path) if audio_path else None
@@ -1955,12 +2155,13 @@ class IntegratedMultimodalSystem:
             if audio_path and audio_path.exists():
                 try:
                     audio_path.unlink()
-                except:
-                    pass
+                except Exception as e:
+                    logger.warning("Failed to delete temp audio file %s: %s", audio_path, e)
             
             return result
         
         except Exception as e:
+            logger.exception("_analyze_with_data failed")
             result["error"] = str(e)
             return result
     
@@ -1978,8 +2179,8 @@ class IntegratedMultimodalSystem:
             try:
                 from web.app import enable_video_stream
                 enable_video_stream(False)
-            except:
-                pass
+            except Exception as e:
+                logger.debug("Failed to disable web video stream: %s", e)
     
     def _push_to_displays(self, result: Dict, frame=None):
         """결과를 디스플레이들(웹, OpenCV)에 전송"""
@@ -1989,7 +2190,7 @@ class IntegratedMultimodalSystem:
                 from web.app import push_result
                 push_result(result)
             except Exception as e:
-                pass  # 웹 대시보드 오류는 무시
+                logger.warning("Failed to push result to dashboard: %s", e)
         
         # OpenCV 디스플레이 업데이트
         if self.opencv_display and self.opencv_display.is_running():
@@ -2027,6 +2228,18 @@ class IntegratedMultimodalSystem:
         text = result.get("transcribed_text", "")
         if text:
             print(f"📝 음성 입력: \"{text}\"")
+        else:
+            print("📝 음성 입력: (없음)")
+
+        sound_event = result.get("sound_event")
+        if sound_event and sound_event.get("top_event"):
+            print("\n🔊 사운드 이벤트 분석:")
+            print(f"   - 최상위 이벤트: {sound_event.get('top_event')} ({float(sound_event.get('top_confidence', 0.0)):.2f})")
+            emergency_events = sound_event.get("emergency_events", []) or []
+            if emergency_events:
+                labels = ", ".join([f"{e.get('label')}({float(e.get('confidence', 0.0)):.2f})" for e in emergency_events[:3]])
+                print(f"   - 위험 후보: {labels}")
+            print(f"   - 트리거 소스: {result.get('trigger_source', 'N/A')}")
         
         # 음성 특성 분석
         voice = result.get("voice_characteristics")

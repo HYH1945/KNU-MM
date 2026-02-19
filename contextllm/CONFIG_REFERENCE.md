@@ -104,13 +104,12 @@ if speech_rate.get("estimated_syllables_per_second", 0) > 5:
 | 설정 | 기본값 | 코드 사용 | 설명 |
 |------|--------|---------|------|
 | `voice_characteristics` | true | IntegratedMultimodalSystem.__init__ | 음성 특성 분석 활성화 |
-| `parallel` | false | main.py | 병렬 처리 (분석 중 음성 인식 계속) |
-| `min_request_interval` | 2.0 | _start_monitoring_parallel() | API 요청 최소 간격 (초) |
-| `max_retries` | 3 | _start_monitoring_parallel() | API 오류 시 재시도 횟수 |
+| `streaming` | false | MultimodalAnalyzer.__init__ | OpenAI 응답 스트리밍 |
+| `parallel` | false | main.py | 호환 옵션 (현재는 순차 모니터링과 동일 동작) |
 
 **CLI 덮어쓰기:**
 ```bash
-# 병렬 처리 활성화 (분석 중에도 음성 인식)
+# 병렬 호환 옵션 (현재는 순차 모니터링과 동일 동작)
 python main.py -m realtime --parallel
 ```
 
@@ -191,13 +190,13 @@ python main.py -m realtime
 - 백그라운드 음성 감지 (pause_threshold=3초)
 - OpenCV 창 자동 표시
 
-### 예제 2: 병렬 처리 (분석 중 계속 음성 인식)
+### 예제 2: 병렬 호환 옵션
 ```bash
 python main.py -m realtime --parallel -v
 ```
-- 병렬 처리 활성화
+- 병렬 모드 호환 옵션 활성화
 - 상세 로그 출력
-- API 요청 최소 2초 간격 유지
+- 현재 엔진은 순차 모니터링으로 동작
 
 ### 예제 3: 스피커 소리 감지용
 ```bash

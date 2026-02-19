@@ -13,6 +13,7 @@ Context LLM - 멀티모달 상황 분석 시스템
 import argparse
 import sys
 from pathlib import Path
+from typing import Optional
 
 import yaml
 
@@ -31,10 +32,11 @@ if ENV_PATH.exists():
     load_dotenv(ENV_PATH)
 
 
-def load_config() -> dict:
+def load_config(config_path: Optional[Path] = None) -> dict:
     """config.yaml 파일 로드"""
-    if CONFIG_PATH.exists():
-        with open(CONFIG_PATH, 'r', encoding='utf-8') as f:
+    target = config_path or CONFIG_PATH
+    if target.exists():
+        with open(target, 'r', encoding='utf-8') as f:
             return yaml.safe_load(f) or {}
     return {}
 
@@ -43,14 +45,7 @@ def load_config() -> dict:
 CONFIG = load_config()
 
 
-def get_config(section: str, key: str, default=None):
-    """설정값 가져오기 (nested key 지원)"""
-    if section in CONFIG and isinstance(CONFIG[section], dict):
-        return CONFIG[section].get(key, default)
-    return CONFIG.get(section, default) if section == key else default
-
-
-def create_system(args):
+def create_system(args, config: dict, enable_speech: bool = True):
     """시스템 초기화"""
     from core.integrated_multimodal_system import (
         IntegratedMultimodalSystem,
@@ -58,8 +53,8 @@ def create_system(args):
     )
     
     # 다운샘플링 설정 (CLI 인자 > config.yaml > 기본값)
-    ds = CONFIG.get('downsampling', {})
-    config = DownsamplingConfig(
+    ds = config.get('downsampling', {})
+    downsampling_config = DownsamplingConfig(
         max_image_size=args.image_size or ds.get('max_image_size', 640),
         jpeg_quality=args.quality or ds.get('jpeg_quality', 75),
         video_fps=args.fps or ds.get('video_fps', 2.0),
@@ -68,35 +63,36 @@ def create_system(args):
     )
     
     # 비디오 설정
-    video_cfg = CONFIG.get('video', {})
+    video_cfg = config.get('video', {})
     camera_id = args.camera if args.camera is not None else video_cfg.get('camera_id', 0)
     
     # 모델 설정
-    model = args.model or CONFIG.get('model', 'gpt-4o-mini')
+    model = args.model or config.get('model', 'gpt-4o-mini')
     
     # 음성 인식 설정
-    speech_cfg = CONFIG.get('speech', {})
+    speech_cfg = config.get('speech', {})
     energy_threshold = args.energy_threshold or speech_cfg.get('energy_threshold', 400)
     dynamic_threshold = getattr(args, 'dynamic_threshold', speech_cfg.get('dynamic_threshold', False))
     
     system = IntegratedMultimodalSystem(
         camera_id=camera_id,
         model=model,
-        downsampling_config=config,
+        downsampling_config=downsampling_config,
         energy_threshold=energy_threshold,
-        dynamic_threshold=dynamic_threshold
+        dynamic_threshold=dynamic_threshold,
+        enable_speech=enable_speech,
     )
     
     return system
 
 
-def mode_realtime(args):
+def mode_realtime(args, config: dict):
     """실시간 모드: 음성 감지 → 영상 캡처 → 분석"""
-    system = create_system(args)
+    system = create_system(args, config, enable_speech=not args.all)
     
     # 반복 횟수 (CLI 인자 > config.yaml)
-    analysis_cfg = CONFIG.get('analysis', {})
-    logging_cfg = CONFIG.get('logging', {})
+    analysis_cfg = config.get('analysis', {})
+    logging_cfg = config.get('logging', {})
     
     iterations = args.iterations
     if iterations is None:
@@ -105,14 +101,15 @@ def mode_realtime(args):
     # verbose 설정 (CLI 인자 > config.yaml)
     verbose = args.verbose if hasattr(args, 'verbose') and args.verbose else logging_cfg.get('verbose', False)
     
-    system.start_monitoring(max_iterations=iterations, verbose=verbose)
+    parallel = args.parallel if args.parallel is not None else analysis_cfg.get('parallel', False)
+    system.start_monitoring(max_iterations=iterations, verbose=verbose, parallel=parallel)
 
 
-def mode_testset(args):
+def mode_testset(args, config: dict):
     """테스트셋 모드: 음성 인식 후 테스트셋 이미지로 분석"""
     # 테스트셋 경로 (CLI 인자 > config.yaml > 기본값)
-    video_cfg = CONFIG.get('video', {})
-    logging_cfg = CONFIG.get('logging', {})
+    video_cfg = config.get('video', {})
+    logging_cfg = config.get('logging', {})
     testset_path = args.testset_path or video_cfg.get('testset_path', 'testsets')
     verbose = args.verbose if hasattr(args, 'verbose') and args.verbose else logging_cfg.get('verbose', False)
     
@@ -120,7 +117,7 @@ def mode_testset(args):
         print(f"❌ 테스트셋 폴더를 찾을 수 없습니다: {testset_path}")
         return
     
-    system = create_system(args)
+    system = create_system(args, config)
     system.use_testset(testset_path)
     
     # 파일 목록 출력
@@ -135,11 +132,30 @@ def mode_testset(args):
             print(f"   {i}: {f}")
     
     # 파일 선택
-    analysis_cfg = CONFIG.get('analysis', {})
+    analysis_cfg = config.get('analysis', {})
     file_index = args.index
     if file_index is None:
         file_index = analysis_cfg.get('testset_index', 0)
-    
+
+    if args.all:
+        results = system.analyze_testset_all(args.text)
+        success_count = sum(1 for r in results if r.get("success"))
+        print(f"\n📊 테스트셋 전체 분석 완료: 성공 {success_count}/{len(results)}")
+        for item in results:
+            filename = item.get("filename", "N/A")
+            if item.get("success"):
+                analysis = item.get("multimodal_analysis", {}) or {}
+                priority = analysis.get("priority", "N/A")
+                urgency = analysis.get("urgency", "N/A")
+                print(f"   ✅ {filename}: {priority}/{urgency}")
+            else:
+                print(f"   ❌ {filename}: {item.get('error', '알 수 없는 오류')}")
+        return
+
+    if file_index < 0 or file_index >= len(files):
+        print(f"❌ 잘못된 인덱스입니다: {file_index} (0~{len(files)-1})")
+        return
+
     system.select_testset_file(file_index)
     print(f"📁 테스트 이미지: {files[file_index]}")
     
@@ -152,11 +168,11 @@ def mode_testset(args):
     system.start_monitoring(max_iterations=iterations, verbose=verbose)
 
 
-def mode_file(args):
+def mode_file(args, config: dict):
     """파일 모드: 음성 인식 후 지정 파일로 분석"""
     # 파일 경로 (CLI 인자 > config.yaml)
-    video_cfg = CONFIG.get('video', {})
-    logging_cfg = CONFIG.get('logging', {})
+    video_cfg = config.get('video', {})
+    logging_cfg = config.get('logging', {})
     file_path = args.file or video_cfg.get('file_path', '')
     verbose = args.verbose if hasattr(args, 'verbose') and args.verbose else logging_cfg.get('verbose', False)
     
@@ -168,13 +184,13 @@ def mode_file(args):
         print(f"❌ 파일을 찾을 수 없습니다: {file_path}")
         return
     
-    system = create_system(args)
+    system = create_system(args, config)
     system.use_file(file_path)
     
     print(f"📁 파일: {file_path}")
     
     # 반복 횟수
-    analysis_cfg = CONFIG.get('analysis', {})
+    analysis_cfg = config.get('analysis', {})
     iterations = args.iterations
     if iterations is None:
         iterations = analysis_cfg.get('iterations')
@@ -183,16 +199,16 @@ def mode_file(args):
     system.start_monitoring(max_iterations=iterations, verbose=verbose)
 
 
-def mode_webcam(args):
+def mode_webcam(args, config: dict):
     """웹캠 모드: 음성 인식 후 웹캠 캡처 분석"""
     # 카메라 ID (CLI 인자 > config.yaml > 기본값)
-    video_cfg = CONFIG.get('video', {})
-    logging_cfg = CONFIG.get('logging', {})
-    display_cfg = CONFIG.get('display', {})
+    video_cfg = config.get('video', {})
+    logging_cfg = config.get('logging', {})
+    display_cfg = config.get('display', {})
     camera_id = args.camera if args.camera is not None else video_cfg.get('camera_id', 0)
     verbose = args.verbose if hasattr(args, 'verbose') and args.verbose else logging_cfg.get('verbose', False)
     
-    system = create_system(args)
+    system = create_system(args, config)
     system.use_webcam(camera_id)
     
     print(f"📷 웹캠: {camera_id}")
@@ -203,7 +219,7 @@ def mode_webcam(args):
         system.enable_opencv_display(True)
     
     # 반복 횟수
-    analysis_cfg = CONFIG.get('analysis', {})
+    analysis_cfg = config.get('analysis', {})
     iterations = args.iterations
     if iterations is None:
         iterations = analysis_cfg.get('iterations')
@@ -212,12 +228,12 @@ def mode_webcam(args):
     system.start_monitoring(max_iterations=iterations, verbose=verbose)
 
 
-def mode_network(args):
+def mode_network(args, config: dict):
     """네트워크 카메라 모드: 음성 인식 후 네트워크 카메라 캡처 분석"""
     # URL (CLI 인자 > config.yaml)
-    video_cfg = CONFIG.get('video', {})
-    logging_cfg = CONFIG.get('logging', {})
-    display_cfg = CONFIG.get('display', {})
+    video_cfg = config.get('video', {})
+    logging_cfg = config.get('logging', {})
+    display_cfg = config.get('display', {})
     url = args.url or video_cfg.get('network_url', '')
     verbose = args.verbose if hasattr(args, 'verbose') and args.verbose else logging_cfg.get('verbose', False)
     
@@ -227,7 +243,7 @@ def mode_network(args):
         print("   예: http://192.168.1.100:8080/video")
         return
     
-    system = create_system(args)
+    system = create_system(args, config)
     system.use_network_camera(url)
     
     print(f"🌐 네트워크 카메라: {url}")
@@ -238,7 +254,7 @@ def mode_network(args):
         system.enable_opencv_display(True)
     
     # 반복 횟수
-    analysis_cfg = CONFIG.get('analysis', {})
+    analysis_cfg = config.get('analysis', {})
     iterations = args.iterations
     if iterations is None:
         iterations = analysis_cfg.get('iterations')
@@ -289,10 +305,17 @@ def print_result(result, verbose: bool = False):
 
 
 def main():
+    global CONFIG
+    pre_parser = argparse.ArgumentParser(add_help=False)
+    pre_parser.add_argument('--config', default=None, help='사용할 설정 파일 경로')
+    pre_args, _ = pre_parser.parse_known_args()
+
+    config_path = Path(pre_args.config).expanduser() if pre_args.config else CONFIG_PATH
+    CONFIG = load_config(config_path)
+
     # config에서 기본값 가져오기
     video_cfg = CONFIG.get('video', {})
     ds_cfg = CONFIG.get('downsampling', {})
-    analysis_cfg = CONFIG.get('analysis', {})
     
     parser = argparse.ArgumentParser(
         description='Context LLM - 멀티모달 상황 분석 시스템',
@@ -336,6 +359,8 @@ def main():
     parser.add_argument('-n', '--iterations', type=int, default=None, help='반복 횟수 (realtime 모드)')
     parser.add_argument('--model', default=None, help=f"OpenAI 모델 (기본값: {CONFIG.get('model', 'gpt-4o-mini')})")
     parser.add_argument('-v', '--verbose', action='store_true', help='상세 출력 모드')
+    parser.add_argument('--parallel', action='store_true', dest='parallel', default=None, help='호환 옵션: 현재는 순차 모니터링과 동일하게 동작')
+    parser.add_argument('--sequential', action='store_false', dest='parallel', help='순차 모니터링 강제')
     
     # 음성 인식 옵션
     speech_cfg = CONFIG.get('speech', {})
@@ -358,16 +383,15 @@ def main():
     parser.add_argument('--duration', type=float, default=None, help=f"캡처 시간 초 (기본값: {ds_cfg.get('video_capture_duration', 5.0)})")
     
     # 설정 파일 관련
-    parser.add_argument('--config', default=None, help='사용할 설정 파일 경로')
+    parser.add_argument('--config', default=pre_args.config, help='사용할 설정 파일 경로')
     parser.add_argument('--show-config', action='store_true', help='현재 설정 출력')
     
     args = parser.parse_args()
     
     # 설정 출력
     if args.show_config:
-        print("\n📋 현재 설정 (config/config.yaml):")
+        print(f"\n📋 현재 설정 ({config_path}):")
         print("-" * 40)
-        import json
         print(yaml.dump(CONFIG, allow_unicode=True, default_flow_style=False))
         return
     
@@ -385,15 +409,15 @@ def main():
     # 모드별 실행
     try:
         if args.mode == 'realtime':
-            mode_realtime(args)
+            mode_realtime(args, CONFIG)
         elif args.mode == 'testset':
-            mode_testset(args)
+            mode_testset(args, CONFIG)
         elif args.mode == 'file':
-            mode_file(args)
+            mode_file(args, CONFIG)
         elif args.mode == 'webcam':
-            mode_webcam(args)
+            mode_webcam(args, CONFIG)
         elif args.mode == 'network':
-            mode_network(args)
+            mode_network(args, CONFIG)
     except KeyboardInterrupt:
         print("\n\n⏹️  사용자가 중단했습니다")
     except Exception as e:
@@ -405,7 +429,7 @@ def main():
             try:
                 from web.app import stop_dashboard
                 stop_dashboard()
-            except:
+            except Exception:
                 pass
 
 
