@@ -150,13 +150,25 @@ def build_system(config: dict, args) -> tuple:
 
     # PTZ 컨트롤러
     ptz_cfg = config.get("ptz", {})
+
+    # ★ SpatialContext 생성 — 카메라 방위각/YOLO/DOA/STT 통합 추적 ★
+    from integrated_system.core.spatial_context import SpatialContext
+    fusion_cfg = config.get("fusion", {})
+    spatial_context = SpatialContext(
+        camera_fov=fusion_cfg.get("camera_fov", 60.0),
+        spatial_match_threshold=fusion_cfg.get("spatial_match_threshold", 30.0),
+        event_history_size=fusion_cfg.get("event_history_size", 50),
+        event_history_duration=fusion_cfg.get("event_history_duration", 60.0),
+    )
+    logging.info(f"🌐 SpatialContext 생성: FOV={fusion_cfg.get('camera_fov', 60.0)}°, 매칭 임계값={fusion_cfg.get('spatial_match_threshold', 30.0)}°")
+
     ptz = UnifiedPTZController({
         "camera_ip": cam_cfg.get("ip", ""),
         "camera_port": cam_cfg.get("port", 80),
         "camera_user": cam_cfg.get("user", ""),
         "camera_password": cam_cfg.get("password", ""),
         "control_mode": ptz_cfg.get("control_mode", "onvif"),
-    })
+    }, spatial_context=spatial_context)
     ptz.initialize()
 
     # 3. 오케스트레이터 생성
@@ -168,13 +180,16 @@ def build_system(config: dict, args) -> tuple:
     if yolo_cfg.get("enabled", True) and not args.no_yolo:
         yolo_module = YOLODetectionModule(
             event_bus=event_bus,
+            config={
+                "model_path": yolo_cfg.get("model_path", "yolov8n.pt"),
+                "confidence": yolo_cfg.get("confidence", 0.3),
+                "pid_kp": ptz_cfg.get("pid_kp", 0.4),
+                "dead_zone": ptz_cfg.get("dead_zone_pixels", 50),
+                "patrol_speed": ptz_cfg.get("patrol_speed", 0.2),
+                "target_classes": yolo_cfg.get("target_classes"),
+            },
             ptz=ptz,
-            model_path=yolo_cfg.get("model_path", "yolov8n.pt"),
-            confidence=yolo_cfg.get("confidence", 0.3),
-            pid_kp=ptz_cfg.get("pid_kp", 0.4),
-            dead_zone=ptz_cfg.get("dead_zone_pixels", 50),
-            patrol_speed=ptz_cfg.get("patrol_speed", 0.2),
-            target_classes=yolo_cfg.get("target_classes"),
+            spatial_context=spatial_context,
         )
         orch.register(yolo_module)
 
@@ -185,6 +200,7 @@ def build_system(config: dict, args) -> tuple:
         mic_module = MicArrayModule(
             event_bus=event_bus,
             ptz=ptz,
+            spatial_context=spatial_context,
             agc_max_gain=mic_cfg.get("agc_max_gain", 15.0),
             vad_threshold=mic_cfg.get("vad_threshold", 10.0),
             confidence_threshold=mic_cfg.get("confidence_threshold", 0.6),
@@ -217,6 +233,7 @@ def build_system(config: dict, args) -> tuple:
             event_bus=event_bus,
             model=llm_cfg.get("model", "gpt-4o-mini"),
             config_path=llm_cfg.get("config_path", "") or None,
+            spatial_context=spatial_context,
         )
         orch.register(llm_module)
 
@@ -245,7 +262,7 @@ def build_system(config: dict, args) -> tuple:
         {"module": "server_reporter"},
     ])
 
-    return orch, event_bus, stream, ptz, mic_module, stt_module
+    return orch, event_bus, stream, ptz, mic_module, stt_module, spatial_context
 
 
 def run_main_loop(orch: Orchestrator, stream: SharedStreamManager, config: dict, args, stt_module=None) -> None:
@@ -565,7 +582,7 @@ def main():
     logger.info("=" * 60)
 
     # 시스템 빌드
-    orch, event_bus, stream, ptz, mic_module, stt_module = build_system(config, args)
+    orch, event_bus, stream, ptz, mic_module, stt_module, spatial_context = build_system(config, args)
 
     # Graceful Shutdown
     def signal_handler(sig, frame):

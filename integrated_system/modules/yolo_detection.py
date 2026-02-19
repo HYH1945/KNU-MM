@@ -16,7 +16,7 @@ YOLO 탐지 모듈 - Detaction_CCTV 서비스를 직접 import하여 BaseModule�
 import os
 import time
 import logging
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List, Optional, TYPE_CHECKING
 
 import cv2
 import numpy as np
@@ -25,6 +25,9 @@ from integrated_system.core.base_module import BaseModule
 from integrated_system.core.event_bus import EventBus, Event
 from integrated_system.core.module_loader import DETECT_DIR, import_from_file
 from integrated_system.modules.ptz_controller import UnifiedPTZController, PTZPriority
+
+if TYPE_CHECKING:
+    from integrated_system.core.spatial_context import SpatialContext
 
 logger = logging.getLogger(__name__)
 
@@ -47,22 +50,20 @@ class YOLODetectionModule(BaseModule):
     def __init__(
         self,
         event_bus: EventBus,
+        config: dict,
         ptz: Optional[UnifiedPTZController] = None,
-        model_path: str = "yolov8n.pt",
-        confidence: float = 0.3,
-        pid_kp: float = 0.4,
-        dead_zone: int = 50,
-        patrol_speed: float = 0.2,
-        target_classes: Optional[List[int]] = None,
+        spatial_context: 'SpatialContext' = None,
     ):
         super().__init__(event_bus)
+        self.config = config
         self.ptz = ptz
-        self.model_path = model_path
-        self.confidence = confidence
-        self.pid_kp = pid_kp
-        self.dead_zone = dead_zone
-        self.patrol_speed = patrol_speed
-        self.target_classes = target_classes
+        self._spatial_context = spatial_context
+        self.model_path = config.get("model_path", "yolov8n.pt")
+        self.confidence = config.get("confidence", 0.3)
+        self.pid_kp = config.get("pid_kp", 0.4)
+        self.dead_zone = config.get("dead_zone", 50)
+        self.patrol_speed = config.get("patrol_speed", 0.2)
+        self.target_classes = config.get("target_classes", None)
 
         # ── 원본 서비스 인스턴스 (initialize에서 생성) ──
         self._vision = None           # VisionProcessor   (vision_processor.py)
@@ -133,6 +134,10 @@ class YOLODetectionModule(BaseModule):
         person_detected = any(obj.get("name", "").lower() == "person" for obj in sorted_objects)
         mode, target = self._decide_action(sorted_objects, center_x, center_y)
         self._current_mode = mode
+
+        # ★ 공간 컨텍스트 갱신 — YOLO 감지 결과를 SpatialContext에 반영
+        if self._spatial_context and sorted_objects:
+            self._spatial_context.update_yolo_results(sorted_objects, (h, w))
 
         # 5. 이벤트 발행
         if sorted_objects:

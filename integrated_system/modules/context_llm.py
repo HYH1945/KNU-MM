@@ -32,7 +32,7 @@ import time
 import threading
 import logging
 from pathlib import Path
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, TYPE_CHECKING
 
 from integrated_system.core.base_module import BaseModule
 from integrated_system.core.event_bus import EventBus, Event
@@ -40,6 +40,9 @@ from integrated_system.core.module_loader import (
     CONTEXTLLM_DIR, CONTEXTLLM_SRC, CONTEXTLLM_CORE,
     ensure_path, import_from_file,
 )
+
+if TYPE_CHECKING:
+    from integrated_system.core.spatial_context import SpatialContext
 
 logger = logging.getLogger(__name__)
 
@@ -63,10 +66,12 @@ class ContextLLMModule(BaseModule):
         event_bus: EventBus,
         model: str = "gpt-4o-mini",
         config_path: Optional[str] = None,
+        spatial_context: 'SpatialContext' = None,
     ):
         super().__init__(event_bus)
         self.model = model
         self.config_path = config_path or str(Path(CONTEXTLLM_DIR) / "config" / "config.yaml")
+        self._spatial_context = spatial_context
 
         self._system = None          # IntegratedMultimodalSystem 인스턴스
         self._multimodal_analyzer = None  # MultimodalAnalyzer 직접 참조
@@ -226,6 +231,9 @@ class ContextLLMModule(BaseModule):
             if self._pending_text and (now - self._pending_text_time < 30):
                 speech_text = self._pending_text
                 self._pending_text = None  # 소비
+                # ★ SpatialContext에도 STT 텍스트 반영 ★
+                if self._spatial_context and speech_text:
+                    self._spatial_context.update_stt(speech_text)
 
         # ★ 트리거: 대화(STT 텍스트)가 감지된 경우에만 분석 ★
         has_speech = speech_text is not None
@@ -326,6 +334,11 @@ class ContextLLMModule(BaseModule):
             else:
                 analysis_text = "현재 상황을 분석해 주세요. 위험하거나 긴급한 상황인지 판단해 주세요."
                 context = "[영상 분석] 실제 음성 입력 없이 영상만 분석. 영상에서 보이는 상황을 객관적으로 분석하세요."
+
+            # ★ SpatialContext에서 멀티모달 컨텍스트 추가 ★
+            if self._spatial_context:
+                spatial_info = self._spatial_context.build_llm_context()
+                context = f"{context}\n\n--- 멀티모달 공간-시간 컨텍스트 ---\n{spatial_info}"
 
             # Downsampling 적용
             if hasattr(self._system, 'downsampler'):

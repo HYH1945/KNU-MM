@@ -23,13 +23,16 @@ import time
 import threading
 import collections
 import logging
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, TYPE_CHECKING
 
 import numpy as np
 
 from integrated_system.core.base_module import BaseModule
 from integrated_system.core.event_bus import EventBus, Event
 from integrated_system.modules.ptz_controller import UnifiedPTZController, PTZPriority
+
+if TYPE_CHECKING:
+    from integrated_system.core.spatial_context import SpatialContext
 
 logger = logging.getLogger(__name__)
 
@@ -49,6 +52,7 @@ class MicArrayModule(BaseModule):
         self,
         event_bus: EventBus,
         ptz: Optional[UnifiedPTZController] = None,
+        spatial_context: 'SpatialContext' = None,
         agc_max_gain: float = 15.0,
         vad_threshold: float = 10.0,
         confidence_threshold: float = 0.6,
@@ -58,6 +62,7 @@ class MicArrayModule(BaseModule):
     ):
         super().__init__(event_bus)
         self.ptz = ptz
+        self._spatial_context = spatial_context
         self.agc_max_gain = agc_max_gain
         self.vad_threshold = vad_threshold
         self.confidence_threshold = confidence_threshold
@@ -197,6 +202,10 @@ class MicArrayModule(BaseModule):
                     "smooth_angle": float(smooth_angle),
                     "confidence": float(confidence),
                 }, priority=1)
+
+                # ★ SpatialContext 갱신 ★
+                if self._spatial_context:
+                    self._spatial_context.update_doa(float(sector), float(confidence))
 
                 if self.ptz:
                     self.ptz.request_move(

@@ -15,6 +15,10 @@ import time
 import logging
 from typing import Optional, Dict, Any
 from types import SimpleNamespace
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from integrated_system.core.spatial_context import SpatialContext
 from enum import IntEnum
 
 from integrated_system.core.module_loader import DETECT_DIR, import_from_file
@@ -40,18 +44,27 @@ class UnifiedPTZController:
     여러 모듈이 동시에 PTZ를 제어하려 할 때 우선순위로 중재합니다.
     """
 
-    def __init__(self, config: dict):
+    def __init__(self, config: dict, spatial_context: 'SpatialContext' = None):
         """
         Args:
             config: PTZ 설정 dict
                 - camera_ip, camera_port, camera_user, camera_password
                 - control_mode: "onvif" | "hikvision_http" | "both"
+            spatial_context: (선택) 공간 컨텍스트 — 카메라 위치 갱신용
         """
         self.config = config
+        self._spatial_context = spatial_context
         self._lock = threading.Lock()
         self._current_priority = PTZPriority.PATROL
         self._current_owner = ""
         self._last_move_time = 0.0
+
+        # ── 카메라 방위각 추적 ──
+        self._current_azimuth: float = 0.0
+        self._current_elevation: float = 0.0
+        self._last_velocity_time: float = 0.0
+        self._last_pan_speed: float = 0.0
+        self._last_tilt_speed: float = 0.0
 
         # ★ 원본 PTZCameraManager 인스턴스 (ONVIF용) ★
         self._onvif_mgr = None
@@ -168,8 +181,12 @@ class UnifiedPTZController:
             self._last_move_time = time.time()
 
         if move_type == "absolute":
+            # absolute 이동: pan = 방위각 (0~360), tilt = 앙각
+            self._update_position_absolute(pan, tilt)
             threading.Thread(target=self._absolute_move, args=(pan, tilt, zoom), daemon=True).start()
         else:
+            # continuous 이동: 속도 기반 위치 추정
+            self._update_position_continuous(pan, tilt)
             threading.Thread(target=self._continuous_move, args=(pan, tilt, zoom), daemon=True).start()
 
         return True
@@ -237,6 +254,50 @@ class UnifiedPTZController:
     @property
     def current_priority(self) -> PTZPriority:
         return self._current_priority
+
+    # ─── 카메라 위치 추적 (통합 레이어) ───
+
+    def _update_position_absolute(self, azimuth: float, elevation: float) -> None:
+        """absolute 이동 시 위치 직접 갱신"""
+        self._current_azimuth = azimuth % 360 if azimuth is not None else self._current_azimuth
+        self._current_elevation = elevation
+        self._last_pan_speed = 0.0
+        self._last_tilt_speed = 0.0
+
+        if self._spatial_context:
+            self._spatial_context.update_camera_position(self._current_azimuth, self._current_elevation)
+
+        logger.debug(f"[PTZ] 위치 갱신 (absolute): 방위각={self._current_azimuth:.1f}°, 앙각={self._current_elevation:.1f}°")
+
+    def _update_position_continuous(self, pan_speed: float, tilt_speed: float) -> None:
+        """continuous 이동 시 속도 기반 위치 추정 갱신"""
+        now = time.time()
+
+        # 이전 속도로 경과 시간만큼 이동한 양 추정
+        if self._last_velocity_time > 0:
+            dt = now - self._last_velocity_time
+            if self._spatial_context:
+                self._spatial_context.update_camera_by_velocity(
+                    self._last_pan_speed, self._last_tilt_speed, dt
+                )
+            # 로컬 추적도 갱신
+            SPEED_SCALE = 90.0
+            self._current_azimuth = (
+                self._current_azimuth + self._last_pan_speed * SPEED_SCALE * dt
+            ) % 360
+            self._current_elevation = max(
+                -90.0, min(90.0, self._current_elevation + self._last_tilt_speed * SPEED_SCALE * dt)
+            )
+
+        # 현재 속도 저장
+        self._last_pan_speed = pan_speed
+        self._last_tilt_speed = tilt_speed
+        self._last_velocity_time = now
+
+    @property
+    def position(self) -> tuple:
+        """현재 추정 카메라 위치 (azimuth, elevation)"""
+        return self._current_azimuth, self._current_elevation
 
     def shutdown(self) -> None:
         """종료"""
