@@ -18,7 +18,7 @@ camera:
 # -----------------------------------------------------------
 ptz:
   control_mode: "onvif"             # "onvif" | "hikvision_http" | "both"
-  pid_kp: 0.4                       # PID 추적 속도 계수
+  pid_kp: 0.8                       # PID 추적 속도 계수
   dead_zone_pixels: 50              # 중심 데드존 (px)
   patrol_speed: 0.2                 # 순찰 모드 속도
 
@@ -27,9 +27,9 @@ ptz:
 # -----------------------------------------------------------
 yolo:
   enabled: true
-  model_path: "yolov8n.pt"         # YOLO 모델 경로
-  confidence: 0.3                   # 최소 확신도
-  target_classes: null              # null=모든 클래스, [0]=사람만
+  model_path: "yolo26n.pt"          # YOLO 모델 경로
+  confidence: 0.7                   # 최소 확신도
+  target_classes: 0                 # null=모든 클래스, [0]=사람만
   patrol_return_delay: 3.0          # 순찰 복귀 딜레이 (초)
 
 # -----------------------------------------------------------
