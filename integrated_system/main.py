@@ -375,7 +375,7 @@ def run_main_loop(orch: Orchestrator, stream: SharedStreamManager, config: dict,
 
                 # 파이프라인 표시
                 cv2.putText(display_frame, f"Pipeline: {pipeline_name}", (180, 25),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.55, (200, 200, 200), 1)
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.55, (200, 200, 200), 2)
 
                 # 모듈 상태 인디케이터 (우상단)
                 module_status_x = w - 280
@@ -417,7 +417,7 @@ def run_main_loop(orch: Orchestrator, stream: SharedStreamManager, config: dict,
                 if stt_text_display:
                     # 마이크 아이콘 + 텍스트
                     cv2.putText(display_frame, "[MIC]", (10, panel_y + 25),
-                                cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 200, 255), 1)
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 200, 255), 2)
 
                     # 텍스트가 길면 잘라서 표시
                     max_chars = w // 12
@@ -425,10 +425,10 @@ def run_main_loop(orch: Orchestrator, stream: SharedStreamManager, config: dict,
                     if len(stt_text_display) > max_chars:
                         display_text += "..."
                     cv2.putText(display_frame, display_text, (70, panel_y + 25),
-                                cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255, 255, 255), 1)
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255, 255, 255), 2)
                 else:
                     cv2.putText(display_frame, "[MIC] (waiting...)", (10, panel_y + 25),
-                                cv2.FONT_HERSHEY_SIMPLEX, 0.5, (100, 100, 100), 1)
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.5, (100, 100, 100), 2)
 
                 # LLM 분석 결과 표시
                 if display_llm.get("analyzed"):
@@ -467,7 +467,7 @@ def run_main_loop(orch: Orchestrator, stream: SharedStreamManager, config: dict,
                         cv2.rectangle(display_frame, (0, 0), (w - 1, h - 1), (0, 0, 255), 4)
                 else:
                     cv2.putText(display_frame, "[LLM] (no analysis yet)", (10, panel_y + 55),
-                                cv2.FONT_HERSHEY_SIMPLEX, 0.5, (100, 100, 100), 1)
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.5, (100, 100, 100), 2)
 
                 # 구분선
                 cv2.line(display_frame, (0, panel_y), (w, panel_y), (80, 80, 80), 1)
@@ -503,11 +503,11 @@ def _draw_doa_compass(frame, angle_deg: float, x: int, y: int, radius: int = 40)
     cv2.addWeighted(overlay, 0.5, frame, 0.5, 0, frame)
 
     # 외곽 원
-    cv2.circle(frame, (x, y), radius, (100, 100, 100), 1)
+    cv2.circle(frame, (x, y), radius, (100, 100, 100), 2)
 
     # 방위 표시
     cv2.putText(frame, "N", (x - 5, y - radius - 5),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.3, (150, 150, 150), 1)
+                cv2.FONT_HERSHEY_SIMPLEX, 0.3, (150, 150, 150), 2)
 
     # 방향 화살표 (angle_deg → 라디안, OpenCV 좌표계)
     # DOA 0° = 전방(위), 시계방향 증가
