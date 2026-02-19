@@ -249,8 +249,8 @@ class YOLODetectionModule(BaseModule):
                 label += " [TARGET]"
             cv2.putText(frame, label, (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
 
-        cv2.putText(frame, f"MODE: {self._current_mode}", (20, 40),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2)
+        # cv2.putText(frame, f"MODE: {self._current_mode}", (20, 40),
+        #             cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2)
         return frame
 
     def shutdown(self) -> None:
