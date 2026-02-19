@@ -165,6 +165,26 @@ speech:
   dynamic_threshold: false        # 동적 에너지 임계값 (false=고정/스피커용, true=자동/마이크용)
 
 # -----------------------------------------------------------
+# 비음성 사운드 이벤트 감지 설정 (YAMNet)
+# -----------------------------------------------------------
+sound_event:
+  enabled: true
+  model_url: https://tfhub.dev/google/yamnet/1
+  min_confidence: 0.12            # 이벤트 후보로 보여줄 최소 점수
+  trigger_threshold: 0.25         # 긴급 트리거 판정 임계값
+  top_k: 5                        # 상위 표시 이벤트 수
+  emergency_keywords:
+    - scream
+    - shout
+    - yell
+    - glass
+    - breaking
+    - gunshot
+    - explosion
+    - siren
+    - alarm
+
+# -----------------------------------------------------------
 # 음성 특성 분석 설정
 # -----------------------------------------------------------
 voice_analysis:

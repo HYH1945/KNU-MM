@@ -12,6 +12,9 @@
 3. **카메라 영상 캡처**
 4. **GPT-4o-mini로 멀티모달 분석**
 
+추가로, **YAMNet 기반 비음성 사운드 이벤트 감지**를 통해
+비명, 유리 파손, 경보음 등도 실시간 트리거로 사용할 수 있습니다.
+
 ---
 
 ## 🚀 빠른 시작
@@ -21,7 +24,7 @@
 pip install -r requirements.txt
 
 # 2. API 키 설정
-cp config/.env.example config/.env
+cp .env.example config/.env
 # config/.env 파일에 OPENAI_API_KEY 입력
 
 # 3. 실행
@@ -110,6 +113,12 @@ python main.py -m webcam --model gpt-4o      # 기본: gpt-4o-mini
 
 # 텍스트 입력 (음성 대신)
 python main.py -m webcam -t "도와주세요!"
+
+# 설정 파일 지정
+python main.py --config ./config/config.yaml -m realtime
+
+# 병렬 호환 옵션 (현재는 순차 모니터링과 동일 동작)
+python main.py -m realtime --parallel
 ```
 
 ---
@@ -160,6 +169,7 @@ python main.py --show-config
 | `analysis` | 분석 관련 설정 |
 | `prompts` | 시스템 프롬프트, 긴급 키워드 |
 | `voice_analysis` | 음성 특성 분석 임계값 |
+| `sound_event` | YAMNet 비음성 이벤트 감지 설정 |
 | `openai` | OpenAI API 설정 (토큰, 온도 등) |
 | `logging` | 로그 저장 설정 |
 
