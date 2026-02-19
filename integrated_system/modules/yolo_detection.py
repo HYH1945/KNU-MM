@@ -48,7 +48,7 @@ class YOLODetectionModule(BaseModule):
         self,
         event_bus: EventBus,
         ptz: Optional[UnifiedPTZController] = None,
-        model_path: str = "yolov8n.pt",
+        model_path: str = "yolo26n.pt",
         confidence: float = 0.3,
         pid_kp: float = 0.4,
         dead_zone: int = 50,
@@ -67,7 +67,7 @@ class YOLODetectionModule(BaseModule):
         # ── 원본 서비스 인스턴스 (initialize에서 생성) ──
         self._vision = None           # VisionProcessor   (vision_processor.py)
         self._priority_mgr = None     # VisualPriorityManager (priority_manager.py)
-        self._reid_mgr = None         # ReIDManager        (reid_manager.py)
+        # self._reid_mgr = None         # ReIDManager        (reid_manager.py) -> BoT-SORT 사용으로 불필요
 
         # ── 통합 상태 머신 ──
         self._tracked_target: Optional[Dict] = None
@@ -86,14 +86,14 @@ class YOLODetectionModule(BaseModule):
             # ★ 원본 모듈 직접 파일 로드 (services/__init__.py의 onvif 의존성 우회) ★
             _vp = import_from_file("_orig_vision_processor", os.path.join(DETECT_DIR, "services", "vision_processor.py"))
             _pm = import_from_file("_orig_priority_manager", os.path.join(DETECT_DIR, "services", "priority_manager.py"))
-            _rm = import_from_file("_orig_reid_manager", os.path.join(DETECT_DIR, "services", "reid_manager.py"))
+            # _rm = import_from_file("_orig_reid_manager", os.path.join(DETECT_DIR, "services", "reid_manager.py"))
             VisionProcessor = _vp.VisionProcessor
             VisualPriorityManager = _pm.VisualPriorityManager
-            ReIDManager = _rm.ReIDManager
+            # ReIDManager = _rm.ReIDManager
 
             self._vision = VisionProcessor(self.model_path, self.confidence)
             self._priority_mgr = VisualPriorityManager()
-            self._reid_mgr = ReIDManager(similarity_threshold=0.75)
+            # self._reid_mgr = ReIDManager(similarity_threshold=0.75)
 
             logger.info("[YOLO] 원본 서비스 로드 완료 (VisionProcessor, VisualPriorityManager, ReIDManager)")
             return True
@@ -110,24 +110,43 @@ class YOLODetectionModule(BaseModule):
         h, w = frame.shape[:2]
         center_x, center_y = w // 2, h // 2
 
-        # 1. YOLO 추론 (★ 원본 VisionProcessor.process_frame)
-        raw_objects, annotated_frame = self._vision.process_frame(frame)
+        # 1. YOLO 추론 및 추적 (BoT-SORT 적용)
+        # VisionProcessor 내부의 model에 직접 접근하여 track 호출 (원본 파일 수정 여부와 무관하게 동작 보장)
+        results = self._vision.model.track(
+            frame,
+            persist=True,
+            tracker="botsort.yaml",  # [중요] BoT-SORT 활성화
+            conf=self.confidence,
+            verbose=False,
+            device='cpu' # 필요시 설정
+        )
+        
+        annotated_frame = results[0].plot() # 시각화용 (필요시 사용)
 
-        # 원본 VisionProcessor는 'name' 필드를 포함하지 않으므로 YOLO 클래스명 추가
-        yolo_names = self._vision.model.names  # {0: 'person', 1: 'bicycle', ...}
-        for obj in raw_objects:
-            obj['name'] = yolo_names.get(obj.get('cls', -1), 'unknown')
+        # 2. 결과 파싱 (기존 Re-ID 형식과 호환되도록 변환)
+        detected_objects = []
+        if results[0].boxes.id is not None:
+            boxes = results[0].boxes.xyxy.cpu().numpy()
+            ids = results[0].boxes.id.cpu().numpy().astype(int)
+            clss = results[0].boxes.cls.cpu().numpy().astype(int)
+            confs = results[0].boxes.conf.cpu().numpy()
 
-        # 2. Re-ID (★ 원본 ReIDManager.update_ids)
-        identified = self._reid_mgr.update_ids(frame, raw_objects)
-
-        # ReIDManager가 'name'을 "Person X"로 덮어쓰므로 YOLO 클래스명을 복원
-        for obj in identified:
-            obj['display_name'] = obj.get('name', '')  # "Person 1" (UI 표시용)
-            obj['name'] = yolo_names.get(obj.get('cls', -1), 'unknown')  # PriorityManager용
+            for box, track_id, cls_id, conf in zip(boxes, ids, clss, confs):
+                # YOLO 클래스 이름 가져오기
+                class_name = self._vision.model.names.get(cls_id, 'unknown')
+                
+                detected_objects.append({
+                    'permanent_id': int(track_id), # BoT-SORT가 유지하는 ID
+                    'cls': int(cls_id),
+                    'confidence': float(conf),
+                    'box': box.tolist(),
+                    'center': ((box[0] + box[2]) / 2, (box[1] + box[3]) / 2),
+                    'name': class_name,
+                    'display_name': f"{class_name} {int(track_id)}" # UI 표시용
+                })
 
         # 3. 우선순위 계산 (★ 원본 VisualPriorityManager.calculate_priorities)
-        sorted_objects = self._priority_mgr.calculate_priorities(identified, w, h)
+        sorted_objects = self._priority_mgr.calculate_priorities(detected_objects, w, h)
 
         # 4. 행동 결정 + PTZ 제어 (통합 레이어)
         person_detected = any(obj.get("name", "").lower() == "person" for obj in sorted_objects)
@@ -230,8 +249,8 @@ class YOLODetectionModule(BaseModule):
                 label += " [TARGET]"
             cv2.putText(frame, label, (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
 
-        cv2.putText(frame, f"MODE: {self._current_mode}", (20, 40),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2)
+        # cv2.putText(frame, f"MODE: {self._current_mode}", (20, 40),
+        #             cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2)
         return frame
 
     def shutdown(self) -> None:
