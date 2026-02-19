@@ -18,8 +18,11 @@ from services import (
 class SurveillanceSystemController:
     """스마트 CCTV 시스템의 메인 컨트롤러"""
 
-    # --- 상수 정의 ---
-    PATROL_RETURN_DELAY_SECONDS = 3.0  # 마지막 객체 탐지 후 순찰 모드로 복귀하기까지 대기 시간
+    PATROL_RETURN_DELAY_SECONDS = 3.0
+    MODE_PATROL = "PATROL"
+    MODE_SEARCHING = "SEARCHING"
+    MODE_TRACKING = "TRACKING"
+    MODE_MANUAL_SUFFIX = " [MANUAL]"
 
     def __init__(self):
         print("[System] Initializing...")
@@ -49,9 +52,9 @@ class SurveillanceSystemController:
         
         # 시스템 상태 변수
         self.is_running: bool = True
-        self.current_mode: str = "PATROL"  # 초기 모드는 순찰
-        self.last_event_time: float = time.time() # 마지막 유의미한 이벤트(객체 탐지) 시간
-        self.tracked_target: Optional[Dict] = None # 현재 추적 중인 객체 정보
+        self.current_mode: str = self.MODE_PATROL
+        self.last_event_time: float = time.time()
+        self.tracked_target: Optional[Dict] = None
         
         self.center_x, self.center_y = 0, 0
         self.frame_count: int = 0
@@ -109,7 +112,6 @@ class SurveillanceSystemController:
 
     def _draw_overlay(self, frame, all_objects: List[Dict], mode_label: str, fps: Optional[float] = None):
         """프레임에 객체 정보 및 현재 상태를 그리는 함수"""
-        # 현재 추적중인 타겟 ID 확인
         target_id = self.tracked_target.get('permanent_id') if self.tracked_target else None
 
         for obj in all_objects:
@@ -130,8 +132,10 @@ class SurveillanceSystemController:
             
             cv2.putText(frame, label, (x1, y1 - 10), 
                         cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
-        
-        # 전체 시스템 모드 정보 표시
+
+        self._draw_status_text(frame, mode_label, fps)
+
+    def _draw_status_text(self, frame, mode_label: str, fps: Optional[float] = None):
         cv2.putText(frame, f"MODE: {mode_label}", (20, 40), 
                     cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2)
         if fps is not None:
@@ -154,13 +158,12 @@ class SurveillanceSystemController:
             while self.is_running:
                 frame = self.stream_handler.get_frame()
                 if frame is None:
-                    time.sleep(0.01) # 프레임이 없을 경우 CPU 과부하 방지
+                    time.sleep(0.01)
                     continue
                 
-                h, w = frame.shape[:2]
-                self.center_x, self.center_y = w // 2, h // 2
-                
-                # FPS 계산
+                frame_h, frame_w = frame.shape[:2]
+                self.center_x, self.center_y = frame_w // 2, frame_h // 2
+
                 frames_since_last += 1
                 elapsed = time.perf_counter() - last_fps_time
                 if elapsed >= 1.0:
@@ -171,61 +174,54 @@ class SurveillanceSystemController:
                 self.frame_count += 1
                 did_infer = (self.frame_count % self.skip_frames == 0)
                 if did_infer:
-                    # 1. AI 인지 (YOLO + Re-ID)
                     raw_objects, _ = self.vision.process_frame(frame)
                     identified_objects = self.reid_manager.update_ids(frame, raw_objects)
-                    
-                    # 2. 우선순위 결정 (점수가 높은 순으로 정렬된 리스트)
-                    self.last_sorted_objects = self.priority_manager.calculate_priorities(identified_objects, w, h)
+                    self.last_sorted_objects = self.priority_manager.calculate_priorities(
+                        identified_objects,
+                        frame_w,
+                        frame_h,
+                    )
 
                 sorted_objects = self.last_sorted_objects
                 
-                # 3. 행동 결정 (상태 머신)
                 manual_override_active = self._is_manual_override_active()
-                # 3-1. 추적할 객체가 하나 이상 존재하는 경우
                 if sorted_objects:
-                    self.last_event_time = time.time() # 마지막 객체 탐지 시간 갱신
-                    
-                    # 현재 추적하던 타겟이 계속 보이는지 확인
+                    self.last_event_time = time.time()
+
                     current_target_still_visible = False
                     if self.tracked_target:
                         for obj in sorted_objects:
                             if obj['permanent_id'] == self.tracked_target['permanent_id']:
-                                self.tracked_target = obj # 최신 정보로 업데이트
+                                self.tracked_target = obj
                                 current_target_still_visible = True
                                 break
-                    
-                    # 현재 타겟이 안보이면, 최우선 순위 객체를 새로운 타겟으로 설정
+
                     if not current_target_still_visible:
                         self.tracked_target = sorted_objects[0]
-                    
-                    # 타겟팅 및 PTZ 제어
-                    self.current_mode = f"TRACKING (ID: {self.tracked_target.get('permanent_id', -1)})"
-                    
+
+                    self.current_mode = (
+                        f"{self.MODE_TRACKING} (ID: {self.tracked_target.get('permanent_id', -1)})"
+                    )
                     tx, ty = self.tracked_target['center']
                     pan, tilt = self._calculate_pid_output(tx, ty)
                     if not manual_override_active:
                         self.ptz.move_async(pan, tilt)
 
-                # 3-2. 추적할 객체가 아무도 없는 경우
                 else:
-                    # 타겟을 잃어버린 직후라면 잠시 대기
-                    if self.current_mode.startswith("TRACKING"):
+                    if self.current_mode.startswith(self.MODE_TRACKING):
                         self.tracked_target = None
-                        self.current_mode = "SEARCHING"
+                        self.current_mode = self.MODE_SEARCHING
                         if not manual_override_active:
-                            self.ptz.stop() # 카메라 움직임 정지
-                    
-                    # 대기 시간(SEARCHING)이 충분히 지났다면 순찰 모드로 전환
+                            self.ptz.stop()
+
                     if time.time() - self.last_event_time > self.PATROL_RETURN_DELAY_SECONDS:
-                        self.current_mode = "PATROL"
+                        self.current_mode = self.MODE_PATROL
                         if not manual_override_active:
                             self.ptz.move_async(self.config.PATROL_SPEED, 0.0)
 
-                # 4. 시각화
                 mode_label = self.current_mode
                 if manual_override_active:
-                    mode_label = f"{self.current_mode} [MANUAL]"
+                    mode_label = f"{self.current_mode}{self.MODE_MANUAL_SUFFIX}"
                 if self.heatmap:
                     self.heatmap.update(frame, sorted_objects, add_points=did_infer)
                     frame = self.heatmap.apply(frame)
