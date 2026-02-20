@@ -83,3 +83,8 @@ class HeatmapOverlay:
             )
 
         return cv2.addWeighted(frame, 1.0 - self.alpha, hm_color, self.alpha, 0)
+
+    def clear(self) -> None:
+        """누적 히트맵 초기화."""
+        if self._heatmap is not None:
+            self._heatmap.fill(0.0)
