@@ -48,7 +48,8 @@ class SurveillanceSystemController:
             intensity=self.config.HEATMAP_INTENSITY,
             downscale=self.config.HEATMAP_DOWNSCALE,
             min_value=self.config.HEATMAP_MIN_VALUE,
-        ) if self.config.SHOW_HEATMAP else None
+        )
+        self.heatmap_enabled: bool = bool(self.config.SHOW_HEATMAP)
         
         # 시스템 상태 변수
         self.is_running: bool = True
@@ -71,6 +72,17 @@ class SurveillanceSystemController:
     def _handle_key(self, key_code: int) -> bool:
         if key_code == ord('q'):
             return False
+
+        if key_code == ord('h'):
+            self.heatmap_enabled = not self.heatmap_enabled
+            print(f"[UI] Heatmap {'ON' if self.heatmap_enabled else 'OFF'}")
+            return True
+
+        if key_code == ord('r'):
+            self.heatmap.clear()
+            print("[UI] Heatmap reset")
+            return True
+
         if not self.config.ENABLE_MANUAL_CONTROL:
             return True
 
@@ -110,7 +122,14 @@ class SurveillanceSystemController:
             
         return max(-1.0, min(1.0, pan_velocity)), max(-1.0, min(1.0, tilt_velocity))
 
-    def _draw_overlay(self, frame, all_objects: List[Dict], mode_label: str, fps: Optional[float] = None):
+    def _draw_overlay(
+        self,
+        frame,
+        all_objects: List[Dict],
+        mode_label: str,
+        fps: Optional[float] = None,
+        heatmap_enabled: bool = False,
+    ):
         """프레임에 객체 정보 및 현재 상태를 그리는 함수"""
         target_id = self.tracked_target.get('permanent_id') if self.tracked_target else None
 
@@ -133,14 +152,29 @@ class SurveillanceSystemController:
             cv2.putText(frame, label, (x1, y1 - 10), 
                         cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
 
-        self._draw_status_text(frame, mode_label, fps)
+        self._draw_status_text(frame, mode_label, fps, heatmap_enabled)
 
-    def _draw_status_text(self, frame, mode_label: str, fps: Optional[float] = None):
+    def _draw_status_text(
+        self,
+        frame,
+        mode_label: str,
+        fps: Optional[float] = None,
+        heatmap_enabled: bool = False,
+    ):
         cv2.putText(frame, f"MODE: {mode_label}", (20, 40), 
                     cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2)
         if fps is not None:
             cv2.putText(frame, f"FPS: {fps:.1f}", (20, 70),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+        cv2.putText(
+            frame,
+            f"HEATMAP: {'ON' if heatmap_enabled else 'OFF'} (h:toggle, r:reset)",
+            (20, 100),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.5,
+            (0, 255, 0),
+            1,
+        )
 
 
     def run(self):
@@ -222,14 +256,17 @@ class SurveillanceSystemController:
                 mode_label = self.current_mode
                 if manual_override_active:
                     mode_label = f"{self.current_mode}{self.MODE_MANUAL_SUFFIX}"
-                if self.heatmap:
+                if self.heatmap_enabled:
                     self.heatmap.update(frame, sorted_objects, add_points=did_infer)
                     frame = self.heatmap.apply(frame)
+                else:
+                    self.heatmap.update(frame, sorted_objects, add_points=False)
                 self._draw_overlay(
                     frame,
                     sorted_objects,
                     mode_label,
                     fps if self.config.SHOW_FPS else None,
+                    self.heatmap_enabled,
                 )
                 cv2.imshow(self.config.WINDOW_NAME, frame)
                 
