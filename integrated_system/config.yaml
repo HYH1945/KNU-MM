@@ -17,7 +17,7 @@ camera:
 # PTZ 제어 설정
 # -----------------------------------------------------------
 ptz:
-  control_mode: "onvif"             # "onvif" | "hikvision_http" | "both"
+  control_mode: "both"             # "onvif" | "hikvision_http" | "both"
   pid_kp: 0.4                       # PID 추적 속도 계수
   dead_zone_pixels: 50              # 중심 데드존 (px)
   patrol_speed: 0.2                 # 순찰 모드 속도

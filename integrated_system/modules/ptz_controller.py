@@ -74,6 +74,7 @@ class UnifiedPTZController:
     def initialize(self) -> bool:
         """PTZ 연결 초기화"""
         control_mode = self.config.get("control_mode", "onvif")
+        logger.info(f"[PTZ] initialize 호출됨. control_mode: '{control_mode}'")
 
         if control_mode in ("onvif", "both"):
             self._connected = self._init_onvif()
@@ -233,10 +234,12 @@ class UnifiedPTZController:
         ※ test.py의 XML 구조 및 API URL을 수정하면 이쪽도 동기화 필요
         """
         if not self._hikvision_auth:
+            logger.error("[PTZ] AbsoluteMove 실패: Hikvision HTTP 인증 정보가 없습니다 (config_mode 확인 필요)")
             return
         try:
             import requests
-            url = f"http://{self.config.get('camera_ip')}/ISAPI/PTZCtrl/channels/1/absolute"
+            # Config dictionary format constructed in main.py has `camera_ip`
+            url = f"http://{self.config.get('camera_ip', '')}/ISAPI/PTZCtrl/channels/1/absolute"
 
             azimuth = int(pan * 10) if pan is not None else 0
             elevation = int(tilt * 10)
@@ -254,6 +257,8 @@ class UnifiedPTZController:
             requests.put(url, data=xml_data, auth=self._hikvision_auth, timeout=1)
         except Exception as e:
             logger.error(f"[PTZ] AbsoluteMove 오류: {e}")
+        else:
+            logger.info(f"[PTZ] AbsoluteMove 명령 전송 완료 (방위각:{azimuth/10}°, 앙각:{elevation/10}°)")
 
     def stop(self) -> None:
         """PTZ 정지"""
