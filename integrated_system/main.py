@@ -386,8 +386,25 @@ def run_main_loop(orch: Orchestrator, stream: SharedStreamManager, config: dict,
                 cv2.putText(display_frame, f"FPS: {fps:.1f}", (10, 25),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
 
-                # YOLO 모드 (프레임 간 유지된 값 사용)
-                cv2.putText(display_frame, f"Mode: {display_yolo_mode}", (10, 55),
+                # YOLO 모드 + PTZ 제어권 표시
+                mode_text = f"Vision: {display_yolo_mode}"
+                
+                # PTZ 제어권 확인
+                try:
+                    ptz_ctl = orch.ptz_controller
+                    if ptz_ctl:
+                        owner = ptz_ctl._current_owner
+                        priority = ptz_ctl._current_priority.name
+                        if owner == "mic_array":
+                            mode_text += " | Audio Control (DOA)"
+                        elif owner == "context_llm":
+                            mode_text += " | LLM Control"
+                        elif owner and owner != "yolo":
+                            mode_text += f" | PTZ: {owner}"
+                except Exception:
+                    pass
+
+                cv2.putText(display_frame, mode_text, (10, 55),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 255, 255), 2)
 
                 # 파이프라인 표시

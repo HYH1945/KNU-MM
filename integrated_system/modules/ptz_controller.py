@@ -171,14 +171,39 @@ class UnifiedPTZController:
             zoom: 줌 값
         """
         with self._lock:
-            if priority < self._current_priority:
-                if time.time() - self._last_move_time < 2.0:
-                    logger.debug(f"[PTZ] 요청 거절: {owner}({priority.name}) < {self._current_owner}({self._current_priority.name})")
-                    return False
+            # 디버깅: 요청 들어옴
+            # logger.debug(f"[PTZ] 요청: {owner}({priority.name}) pan={pan} tilt={tilt}")
 
-            self._current_priority = priority
-            self._current_owner = owner
-            self._last_move_time = time.time()
+            # 1. 같은 주인이면 무조건 허용 (갱신)
+            if owner == self._current_owner:
+                self._current_priority = priority
+                self._last_move_time = time.time()
+                # logger.debug(f"[PTZ] 갱신: {owner}")
+            
+            # 2. 다른 주인이면 우선순위 및 락 체크
+            else:
+                # 2-1. 낮은 우선순위 거절
+                if priority < self._current_priority:
+                     if time.time() - self._last_move_time < 2.0:
+                         logger.info(f"[PTZ] 요청 거절: {owner}({priority.name}) < {self._current_owner}({self._current_priority.name})")
+                         return False
+                
+                # 2-2. 높은(또는 같은) 우선순위라도 락 타임 체크
+                # 단, EMERGENCY는 즉시 허용, PATROL(0)은 보호할 필요 없음
+                elapsed = time.time() - self._last_move_time
+                should_lock = (elapsed < 2.0)
+                is_emergency = (priority == PTZPriority.EMERGENCY)
+                is_patrol = (self._current_priority == PTZPriority.PATROL)
+
+                if should_lock and not is_emergency and not is_patrol:
+                     logger.info(f"[PTZ] 제어권 락(Lock): {self._current_owner} 동작 중 ({elapsed:.1f}s). {owner} 대기.")
+                     return False
+
+                # 2-3. 제어권 변경 승인
+                logger.info(f"[PTZ] 제어권 변경: {self._current_owner}({self._current_priority.name}) -> {owner}({priority.name})")
+                self._current_priority = priority
+                self._current_owner = owner
+                self._last_move_time = time.time()
 
         if move_type == "absolute":
             # absolute 이동: pan = 방위각 (0~360), tilt = 앙각

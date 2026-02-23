@@ -62,7 +62,8 @@ KNU-MM/
 │   │   ├── event_bus.py        #   이벤트 버스 (Pub/Sub)
 │   │   ├── base_module.py      #   모듈 공통 인터페이스
 │   │   ├── orchestrator.py     #   파이프라인 오케스트레이터
-│   │   └── module_loader.py    #   원본 모듈 경로 관리 + import 유틸
+│   │   ├── module_loader.py    #   원본 모듈 경로 관리 + import 유틸
+│   │   └── spatial_context.py  #   ★ 시각-청각 공간/시간 컨텍스트 융합
 │   └── modules/                # 래퍼 모듈 (원본 폴더에서 직접 import)
 │       ├── stream_manager.py   #   공유 영상 스트림
 │       ├── yolo_detection.py   #   YOLO 객체 탐지 + Re-ID + 추적
@@ -201,13 +202,22 @@ class MyModule(BaseModule):
     def shutdown(self) -> None: ...
 ```
 
+### SpatialContext (멀티모달 융합)
+
+시각(YOLO의 방위각), 청각(MicArray DOA), 카메라 상태(PTZ)를 통합하여 시간 흐름에 따라 매칭합니다.
+- 소리 발생 방향(DOA)에 현재 인식된 사람(YOLO)이 존재하는지 공간적 일치 여부 계산 (`check_spatial_match`)
+- 시간적 이벤트 히스토리를 추적하여 LLM에 풍부하고 구조화된 컨텍스트 제공
+
 ### PTZ 우선순위 중재
 
-여러 모듈이 PTZ를 동시에 제어하려 할 때, 우선순위로 결정:
+여러 모듈이 PTZ를 동시에 제어하려 할 때, 우선순위와 제어권 락(Lock)을 기반으로 중재합니다:
 
 ```
 EMERGENCY(3) > YOLO_TRACKING(2) > MIC_DOA(1) > PATROL(0)
 ```
+
+- 제어 갱신 후 2초 이내에는 더 낮은 우선순위의 탈취 요청 무시 (제어권 보호)
+- 단, `EMERGENCY` 긴급 요청은 즉시 탈취 가능하며, `PATROL` 모드는 권한 보호 없음
 
 ### 분석 트리거 조건
 
@@ -225,7 +235,7 @@ ContextLLM은 다음 중 하나라도 충족하면 분석을 실행합니다:
 
 ```
 ┌──────────────────────────────────────────────┐
-│  FPS: 30.0 │ Mode: TRACKING │ Pipeline: ...  │ 상단 바
+│  FPS: 30.0 │ Vision: TRACKING | PTZ: yolo    │ 상단 바 (PTZ 제어권 표시)
 │  [YOLO ●] [MIC ●] [STT ●] [LLM ●]          │ 모듈 상태
 ├──────────────────────────────────────────────┤
 │                                              │
