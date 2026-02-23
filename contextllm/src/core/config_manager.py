@@ -237,5 +237,5 @@ if __name__ == "__main__":
     
     print(f"\n🚨 긴급 키워드: {get_emergency_keywords()[:5]}...")
     
-    print(f"\n📝 시스템 프롬프트 (첫 100자):")
+    print("\n📝 시스템 프롬프트 (첫 100자):")
     print(f"   {get_prompt('system')[:100]}...")

@@ -1,0 +1,38 @@
+# Mic + ContextLLM fusion runtime dependencies
+# usage:
+#   pip install -r mic_context_fusion/requirements.txt
+#
+# Notes:
+# - This file is for `mic_context_fusion/main.py`.
+# - Versions are aligned with contextllm/requirements.txt where possible.
+# - Python 3.10 is recommended for TensorFlow/YAMNet compatibility.
+
+# --- Core runtime ---
+numpy>=1.26.0,<3.0.0
+opencv-python>=4.8.0
+PyYAML>=6.0
+python-dotenv>=1.0.0
+requests>=2.32.0
+
+# --- ContextLLM multimodal analysis ---
+openai>=1.0.0
+pydantic>=2.0.0
+Pillow>=10.0.0
+
+# --- Speech / STT ---
+SpeechRecognition==3.14.5
+pyaudio>=0.2.13
+
+# --- Audio file processing (video->audio fallback, YAMNet file mode) ---
+librosa>=0.10.2
+soundfile>=0.12.1
+
+# --- PTZ / Mic array ---
+onvif-zeep>=0.2.12
+pyusb>=1.2.1
+
+# --- Optional: non-speech event detection (YAMNet) ---
+tensorflow-macos>=2.16.0; platform_system=="Darwin"
+tensorflow>=2.16.0; platform_system!="Darwin"
+tensorflow-hub>=0.16.1
+tensorflow-metal>=1.1.0; platform_system=="Darwin"

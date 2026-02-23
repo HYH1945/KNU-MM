@@ -8,7 +8,6 @@ YAMNet 기반 비음성/환경음 이벤트 감지기
 from __future__ import annotations
 
 import csv
-from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import numpy as np
@@ -21,6 +20,13 @@ except ImportError:
     tf = None
     hub = None
     TF_YAMNET_AVAILABLE = False
+
+try:
+    import librosa
+    LIBROSA_AVAILABLE = True
+except ImportError:
+    librosa = None
+    LIBROSA_AVAILABLE = False
 
 
 class SoundEventDetector:
@@ -35,6 +41,7 @@ class SoundEventDetector:
         emergency_keywords: Optional[List[str]] = None,
     ):
         self.enabled = False
+        self.last_error: str = ""
         self.model_url = model_url
         self.min_confidence = max(0.0, min(1.0, float(min_confidence)))
         self.trigger_threshold = max(0.0, min(1.0, float(trigger_threshold)))
@@ -56,13 +63,15 @@ class SoundEventDetector:
         ]
 
         if not TF_YAMNET_AVAILABLE:
+            self.last_error = "tensorflow/tensorflow_hub import unavailable"
             return
 
         try:
             self.model = hub.load(self.model_url)
             self.class_names = self._load_class_names()
             self.enabled = True
-        except Exception:
+        except Exception as exc:
+            self.last_error = f"{type(exc).__name__}: {exc}"
             self.enabled = False
 
     def _load_class_names(self) -> List[str]:
@@ -119,8 +128,7 @@ class SoundEventDetector:
         label_lower = (label or "").lower()
         return any(keyword in label_lower for keyword in self.emergency_keywords)
 
-    def detect_from_audio(self, audio: Any) -> Dict[str, Any]:
-        """오디오에서 이벤트 감지"""
+    def _analyze_waveform(self, waveform: np.ndarray) -> Dict[str, Any]:
         default_result = {
             "enabled": self.enabled,
             "model": "yamnet",
@@ -135,7 +143,6 @@ class SoundEventDetector:
         if not self.enabled:
             return default_result
 
-        waveform = self._audio_to_float_mono(audio)
         if waveform is None or waveform.size < int(self.target_sample_rate * 0.2):
             return default_result
 
@@ -181,3 +188,38 @@ class SoundEventDetector:
 
         except Exception:
             return default_result
+
+    def detect_from_audio(self, audio: Any) -> Dict[str, Any]:
+        """오디오에서 이벤트 감지"""
+        waveform = self._audio_to_float_mono(audio)
+        return self._analyze_waveform(waveform)
+
+    def detect_from_file(self, file_path: Any) -> Dict[str, Any]:
+        """오디오 파일(mp3/wav 등)에서 이벤트 감지"""
+        default_result = {
+            "enabled": self.enabled,
+            "model": "yamnet",
+            "event_detected": False,
+            "triggered": False,
+            "top_event": None,
+            "top_confidence": 0.0,
+            "events": [],
+            "emergency_events": [],
+        }
+        if not self.enabled:
+            return default_result
+        if not LIBROSA_AVAILABLE:
+            result = dict(default_result)
+            result["error"] = "librosa_unavailable"
+            return result
+
+        try:
+            waveform, sample_rate = librosa.load(str(file_path), sr=None, mono=True)
+            waveform = waveform.astype(np.float32, copy=False)
+            if sample_rate != self.target_sample_rate:
+                waveform = self._resample_linear(waveform, sample_rate, self.target_sample_rate)
+            return self._analyze_waveform(waveform)
+        except Exception as exc:
+            result = dict(default_result)
+            result["error"] = f"{type(exc).__name__}: {exc}"
+            return result

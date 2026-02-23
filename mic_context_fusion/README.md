@@ -45,6 +45,14 @@ python mic_context_fusion/main.py --openai-api-key sk-...
 
 - `mic_context_fusion/main.py`
 - `mic_context_fusion/config.yaml`
+- `mic_context_fusion/requirements.txt`
+
+## Recent Updates
+
+- `stt.non_speech_audio` 이벤트 수신 후 YAMNet으로 비음성 분류
+- 비음성 트리거 시에도 PTZ 정렬 후 프레임 캡처 + 멀티모달 분석 수행
+- `non_speech.trigger_threshold`, `cooldown_seconds` 등 config 튜닝 항목 추가
+- 팀 환경 공유를 위해 상대경로 기반 import/설정 로딩 유지
 
 ## Notes
 

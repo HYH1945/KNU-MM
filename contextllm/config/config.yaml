@@ -18,8 +18,8 @@ api_keys:
 # -----------------------------------------------------------
 # 기본 설정
 # -----------------------------------------------------------
-mode: realtime  # realtime, testset, file, webcam, network
-model: gpt-4o-mini  # gpt-4o-mini, gpt-4o, gpt-4-turbo
+mode: testset  # realtime, testset, file, webcam, network
+model: gpt-4o  # gpt-4o-mini, gpt-4o, gpt-4-turbo
 
 # -----------------------------------------------------------
 # 비디오 소스 설정
@@ -48,8 +48,22 @@ analysis:
   iterations: null                # 반복 횟수 (null = 무한)
   analyze_all_testset: false      # 테스트셋 전체 분석 여부
   testset_index: 2                # 테스트셋에서 분석할 파일 인덱스
-  voice_characteristics: true     # 음성 특성 분석 (피치/에너지) - false로 하면 1-2초 빨라짐
+  voice_characteristics: false    # 음성 특성 분석 (피치/에너지) - false로 하면 1-2초 빨라짐
   streaming: false                # 스트리밍 응답 (체감 속도 향상)
+
+# -----------------------------------------------------------
+# config 기반 멀티 입력 테스트 ("" = 미입력)
+# mode: testset + media_test.enabled: true 로 사용
+# 우선순위: image_path > video_path > live camera
+# video_path만 넣으면 비디오 오디오를 자동 추출해 YAMNet/STT 분석에 사용
+# -----------------------------------------------------------
+media_test:
+  enabled: true
+  image_path: "testsets/smile.png"                  # 이미지 파일 경로
+  video_path: ""                  # 비디오 파일 경로(mp4 등)
+  audio_path: "testsets/scream_man.mp3"                  # 오디오 파일 경로(mp3/wav 등, 설정 시 video 오디오보다 우선)
+  text_input: ""                  # 오디오 파일에 STT 텍스트가 없을 때 사용할 보조 문장
+  phrase_time_limit: 6.0          # audio_path가 비어있을 때 실시간 음성 최대 수집 시간
 
 # -----------------------------------------------------------
 # 로깅 설정
@@ -85,6 +99,8 @@ prompts:
 
     출력 규칙:
     - markdown/code block 없이 JSON 객체만 반환
+    - JSON 키 이름은 스키마대로 유지하고, 모든 서술형 값은 반드시 한국어로 작성
+    - 영어 문장/영어 설명문 사용 금지 (불가피한 고유명사 제외)
     - urgency와 priority는 반드시 CRITICAL/HIGH/MEDIUM/LOW 중 하나
     - is_emergency가 false면 emergency_reason은 null
     - 불확실하면 추측 대신 "근거 부족"을 명시
@@ -135,7 +151,7 @@ prompts:
 speech:
   enabled: true                 # 음성 트리거 활성화 여부
   energy_threshold: 300           # 음성 감지 에너지 임계값 (낮을수록 민감, 기본값: 400)
-  pause_threshold: 3.0            # 문장 끝 판단 침묵 시간 (초, 기본값: 3.0)
+  pause_threshold: 0.8            # 문장 끝 판단 침묵 시간 (초, 기본값: 3.0)
   dynamic_threshold: false        # 동적 에너지 임계값 (false=고정/스피커용, true=자동/마이크용)
 
 # -----------------------------------------------------------
@@ -145,7 +161,7 @@ sound_event:
   enabled: true
   model_url: https://tfhub.dev/google/yamnet/1
   min_confidence: 0.12            # 이벤트 후보로 보여줄 최소 점수
-  trigger_threshold: 0.25         # 긴급 트리거 판정 임계값
+  trigger_threshold: 0.18         # 긴급 트리거 판정 임계값
   top_k: 5                        # 상위 표시 이벤트 수
   emergency_keywords:
     - scream

@@ -104,6 +104,16 @@ class SpeechSettings:
 
 
 @dataclass
+class MediaTestSettings:
+    enabled: bool = False
+    image_path: str = ""
+    video_path: str = ""
+    audio_path: str = ""
+    text_input: str = ""
+    phrase_time_limit: float = 6.0
+
+
+@dataclass
 class ContextLLMSettings:
     mode: str = "realtime"
     model: str = "gpt-4o-mini"
@@ -113,6 +123,7 @@ class ContextLLMSettings:
     logging: LoggingSettings = field(default_factory=LoggingSettings)
     display: DisplaySettings = field(default_factory=DisplaySettings)
     speech: SpeechSettings = field(default_factory=SpeechSettings)
+    media_test: MediaTestSettings = field(default_factory=MediaTestSettings)
     raw: Dict[str, Any] = field(default_factory=dict)
 
     def validate(self) -> None:
@@ -137,6 +148,7 @@ def build_settings(raw: Dict[str, Any]) -> ContextLLMSettings:
     logging_raw = raw.get("logging", {}) or {}
     display_raw = raw.get("display", {}) or {}
     speech_raw = raw.get("speech", {}) or {}
+    media_test_raw = raw.get("media_test", {}) or {}
 
     settings = ContextLLMSettings(
         mode=_to_str(raw.get("mode"), "realtime"),
@@ -178,6 +190,14 @@ def build_settings(raw: Dict[str, Any]) -> ContextLLMSettings:
             energy_threshold=_to_int(speech_raw.get("energy_threshold"), 400),
             pause_threshold=_to_float(speech_raw.get("pause_threshold"), 3.0),
             dynamic_threshold=_to_bool(speech_raw.get("dynamic_threshold"), False),
+        ),
+        media_test=MediaTestSettings(
+            enabled=_to_bool(media_test_raw.get("enabled"), False),
+            image_path=_to_str(media_test_raw.get("image_path"), ""),
+            video_path=_to_str(media_test_raw.get("video_path"), ""),
+            audio_path=_to_str(media_test_raw.get("audio_path"), ""),
+            text_input=_to_str(media_test_raw.get("text_input"), ""),
+            phrase_time_limit=_to_float(media_test_raw.get("phrase_time_limit"), 6.0),
         ),
         raw=dict(raw),
     )

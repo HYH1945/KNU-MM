@@ -31,9 +31,20 @@ analysis:
   iterations: null              # null: 무한 반복, 숫자: N회 반복
   analyze_all_testset: false    # testset 모드에서 전체 파일 분석
   parallel: false               # 호환 옵션 (현재는 순차 모니터링과 동일)
-  voice_characteristics: true   # 음성 특성 분석 활성화
+  voice_characteristics: false  # 음성 특성 분석 활성화
   streaming: false              # OpenAI 응답 스트리밍
   testset_index: 0              # 테스트셋 기본 인덱스
+
+# config 기반 멀티 입력 테스트 ("" = 미입력)
+# mode: testset + media_test.enabled: true
+# video_path만 넣으면 비디오 오디오를 자동 추출해 YAMNet/STT 분석에 사용
+media_test:
+  enabled: false
+  image_path: ""                # 이미지 파일 경로
+  video_path: ""                # 비디오 파일 경로(mp4 등)
+  audio_path: ""                # 오디오 파일 경로(mp3/wav 등, 설정 시 video 오디오보다 우선)
+  text_input: ""                # 오디오 파일 보조 텍스트(선택)
+  phrase_time_limit: 6.0        # audio_path가 없을 때 실시간 음성 최대 길이
 
 # 다운샘플링 설정
 downsampling:
@@ -59,7 +70,7 @@ logging:
 speech:
   enabled: true                 # true: 음성 트리거 사용, false: 음성 비활성
   energy_threshold: 400         # 음성 감지 민감도 (낮을수록 민감)
-  pause_threshold: 3.0          # 문장 끝 판단 무음 시간(초)
+  pause_threshold: 0.8          # 문장 끝 판단 무음 시간(초)
   dynamic_threshold: false      # 동적 임계값 사용 여부
 
 # 음성 특성 분석 임계값
@@ -77,7 +88,7 @@ sound_event:
   enabled: true
   model_url: "https://tfhub.dev/google/yamnet/1"
   min_confidence: 0.12
-  trigger_threshold: 0.25
+  trigger_threshold: 0.18
   top_k: 5
   emergency_keywords:
     - scream

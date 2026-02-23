@@ -79,6 +79,7 @@ class ContextLLMRunner:
             model=self.settings.model,
             downsampling_config=downsampling_config,
             energy_threshold=self.settings.speech.energy_threshold,
+            pause_threshold=self.settings.speech.pause_threshold,
             dynamic_threshold=self.settings.speech.dynamic_threshold,
             enable_speech=speech_enabled,
         )
@@ -132,6 +133,10 @@ class ContextLLMRunner:
         self._run_monitoring(system)
 
     def _run_testset(self) -> None:
+        if self.settings.media_test.enabled:
+            self._run_media_test()
+            return
+
         testset_path = Path(self.settings.video.testset_path)
         if not testset_path.exists():
             print(f"❌ 테스트셋 폴더를 찾을 수 없습니다: {testset_path}")
@@ -168,8 +173,45 @@ class ContextLLMRunner:
             return
 
         system.select_testset_file(index)
-        print(f"📁 테스트 이미지: {files[index]}")
+        selected_file = files[index]
+        print(f"📁 테스트 파일: {selected_file}")
+
+        media_extensions = {
+            ".mp3", ".wav", ".m4a", ".flac", ".ogg", ".aac",
+            ".mp4", ".avi", ".mov", ".mkv", ".webm", ".flv", ".wmv",
+        }
+        if Path(selected_file).suffix.lower() in media_extensions:
+            result = system.analyze_video_only(self.settings.analysis.default_text or None)
+            if result.get("success"):
+                analysis = result.get("multimodal_analysis", {}) or {}
+                print(
+                    "✅ testset-media "
+                    f"priority={analysis.get('priority', 'N/A')} "
+                    f"urgency={analysis.get('urgency', 'N/A')} "
+                    f"situation={analysis.get('situation_type', 'N/A')}"
+                )
+            else:
+                print(f"❌ testset-media failed: {result.get('error', 'unknown')}")
+            return
+
         self._run_monitoring(system)
+
+    def _run_media_test(self) -> None:
+        media = self.settings.media_test
+        system = self._create_system()
+        result = system.analyze_configured_media_inputs(
+            image_path=media.image_path,
+            video_path=media.video_path,
+            audio_path=media.audio_path,
+            text_input=media.text_input or None,
+            phrase_time_limit=media.phrase_time_limit,
+        )
+        if not result.get("success"):
+            print(f"❌ media_test failed: {result.get('error', 'unknown')}")
+            return
+
+        if hasattr(system, "_print_result_summary"):
+            system._print_result_summary(result, verbose=self.settings.logging.verbose)
 
     def _run_file(self) -> None:
         file_path = self.settings.video.file_path.strip()

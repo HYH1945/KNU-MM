@@ -9,9 +9,8 @@
     confidence = analyzer.calculate_confidence(audio_features, llm_analysis)
 """
 
-import os
 import numpy as np
-from typing import Dict, Any, Optional, Tuple
+from typing import Dict, Any
 
 try:
     import librosa
@@ -19,12 +18,6 @@ try:
 except ImportError:
     LIBROSA_AVAILABLE = False
     print("⚠️  librosa가 설치되지 않았습니다. 음성 특성 분석이 제한됩니다.")
-
-try:
-    import scipy
-    SCIPY_AVAILABLE = True
-except ImportError:
-    SCIPY_AVAILABLE = False
 
 # 설정 관리자 임포트
 try:

@@ -6,11 +6,9 @@
 
 import os
 import sys
-import json
 import threading
 import time
 import cv2
-import base64
 from datetime import datetime
 from pathlib import Path
 from flask import Flask, render_template, jsonify, Response
@@ -264,7 +262,6 @@ if __name__ == '__main__':
     print("🚀 웹 대시보드 테스트 모드")
     dashboard.start(port=5000)
     
-    import time
     try:
         while True:
             time.sleep(1)

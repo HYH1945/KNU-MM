@@ -16,7 +16,6 @@
 """
 
 import os
-import sys
 import json
 import base64
 import logging
@@ -327,9 +326,13 @@ class MultimodalAnalyzer:
             else:
                 print("⚠️  음성 특성 분석 정보 없음")
             
-            user_message += f"""
+            user_message += """
 **3. 영상:**
 제공된 이미지를 분석하여 위 음성과 음성 특성과 함께 전체 상황을 판단해주세요.
+
+**4. 언어 규칙:**
+JSON 키 이름은 그대로 유지하고, 모든 서술형 값은 반드시 한국어로 작성하세요.
+영어 문장으로 답하지 마세요(불가피한 고유명사 제외).
 """
             
             # 메시지 구성
@@ -386,7 +389,7 @@ class MultimodalAnalyzer:
             
             # 안전 정책 거부 감지
             if content and ("I'm sorry" in content or "I can't assist" in content or "I cannot" in content):
-                print(f"⚠️  OpenAI 안전 정책으로 인한 분석 거부")
+                print("⚠️  OpenAI 안전 정책으로 인한 분석 거부")
                 print(f"   원본 응답: {content}")
                 return self._normalize_analysis_result({
                     'context': '이미지 내용을 분석할 수 없음 (안전 정책)',

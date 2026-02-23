@@ -57,6 +57,7 @@ class ContextLLMService:
                 video_capture_duration=ds.video_capture_duration,
             ),
             energy_threshold=self.settings.speech.energy_threshold,
+            pause_threshold=self.settings.speech.pause_threshold,
             dynamic_threshold=self.settings.speech.dynamic_threshold,
             enable_speech=False,
         )
