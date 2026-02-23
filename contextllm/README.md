@@ -37,14 +37,16 @@ python main.py --help
 
 ```
 contextllm/
-├── main.py                                  # 🚀 메인 진입점 (CLI)
+├── main.py                                  # 🚀 메인 진입점 (얇은 CLI)
 ├── src/
+│   ├── app/
+│   │   ├── settings.py                      # 설정 스키마/로더 (config-first)
+│   │   ├── runner.py                        # 실행 오케스트레이션
+│   │   └── service.py                       # 외부 시스템 결합용 파사드 API
 │   ├── core/
 │   │   ├── integrated_multimodal_system.py  # 🔥 핵심 시스템
 │   │   ├── multimodal_analyzer.py           # GPT-4o 멀티모달 분석
 │   │   └── voice_characteristics.py         # 음성 특성 분석
-│   └── stt/
-│       └── google_realtime_analyzer.py      # Google Realtime STT (예정)
 │
 ├── tests/
 │   └── test_integrated_multimodal.py        # 대화형 테스트 인터페이스
@@ -55,71 +57,66 @@ contextllm/
 └── requirements.txt
 ```
 
+아키텍처 상세는 `ARCHITECTURE.md`를 참고하세요.
+
 ---
 
-## 🎮 사용법 (CLI)
+## 🔌 외부 시스템 결합
 
-### 기본 명령어
+CLI 없이 다른 시스템에서 직접 호출하려면 `ContextLLMService`를 사용하세요.
+
+```python
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path("src").resolve()))
+
+from app.service import ContextLLMService
+
+service = ContextLLMService.from_config(Path("config/config.yaml"))
+result = service.analyze_frame(
+    text="도와주세요, 사람이 쓰러졌어요",
+    frame=frame_bgr_numpy,
+    additional_context="Mic DOA=120deg, PTZ settled"
+)
+
+if result["success"] and result["is_emergency"]:
+    print(result["priority"], result["analysis"]["action"])
+```
+
+---
+
+## 🎮 사용법 (Config-First)
+
+실행 옵션은 `config/config.yaml`에서 관리하고, CLI는 최소 옵션만 사용합니다.
 
 ```bash
 # 도움말
 python main.py --help
-python main.py -h
-```
 
-### 모드별 실행
-
-```bash
-# 1. 실시간 모드 (기본) - 음성 감지 → 영상 캡처 → 분석
+# 설정값대로 실행 (mode 포함)
 python main.py
+
+# 모드만 일시적으로 override
 python main.py --mode realtime
-python main.py -m realtime
-
-# 5회 반복 후 종료
-python main.py -m realtime -n 5
-
-# 2. 테스트셋 모드 - testsets/ 폴더의 파일들 분석
-python main.py -m testset                    # 첫 번째 파일 분석
-python main.py -m testset --all              # 전체 파일 분석
-python main.py -m testset -i 2               # 3번째 파일 분석
-python main.py -m testset --testset-path ./my_tests  # 다른 폴더
-
-# 3. 파일 모드 - 특정 이미지/비디오 분석
-python main.py -m file -f video.mp4
-python main.py -m file -f image.jpg -t "이 상황을 분석해주세요"
-
-# 4. 웹캠 모드 - 음성 없이 웹캠만 분석
-python main.py -m webcam
-python main.py -m webcam -c 1                # 카메라 ID 1번
-
-# 5. 네트워크 카메라 모드
-python main.py -m network -u rtsp://192.168.1.100:554/stream
-python main.py -m network -u http://192.168.1.100:8080/video
-```
-
-### 고급 옵션
-
-```bash
-# 다운샘플링 설정
-python main.py -m realtime \
-    --image-size 480 \      # 최대 이미지 크기 (기본: 640)
-    --quality 60 \          # JPEG 품질 (기본: 75)
-    --fps 1.0 \             # 분석 FPS (기본: 2.0)
-    --max-frames 5 \        # 최대 프레임 수 (기본: 10)
-    --duration 3.0          # 캡처 시간 (기본: 5.0초)
-
-# 모델 선택
-python main.py -m webcam --model gpt-4o      # 기본: gpt-4o-mini
-
-# 텍스트 입력 (음성 대신)
-python main.py -m webcam -t "도와주세요!"
+python main.py --mode testset
+python main.py --mode file
+python main.py --mode webcam
+python main.py --mode network
 
 # 설정 파일 지정
-python main.py --config ./config/config.yaml -m realtime
+python main.py --config ./config/config.yaml
 
-# 병렬 호환 옵션 (현재는 순차 모니터링과 동일 동작)
-python main.py -m realtime --parallel
+# 현재 설정 확인
+python main.py --show-config
 ```
+
+모드별 입력값은 CLI가 아니라 `config/config.yaml`에서 수정합니다.
+
+- `mode: testset` + `analysis.analyze_all_testset: true`
+- `mode: file` + `video.file_path: "path/to/file.mp4"`
+- `mode: network` + `video.network_url: "rtsp://..."`
+- `mode: webcam` + `video.camera_id: 0`
 
 ---
 
@@ -151,7 +148,8 @@ python main.py -m realtime --parallel
 
 ## ⚙️ 설정
 
-모든 설정은 `config/config.yaml`에서 관리됩니다. CLI 인자가 config 값보다 우선합니다.
+모든 설정은 `config/config.yaml`에서 관리됩니다.  
+CLI는 `--config`, `--mode`, `--show-config`만 사용합니다.
 
 ```bash
 # 현재 설정 확인
@@ -210,11 +208,10 @@ OPENAI_API_KEY=sk-...
 cp my_video.mp4 testsets/
 cp my_image.jpg testsets/
 
-# 전체 분석
-python main.py -m testset --all
-
-# 특정 파일 분석 (텍스트 입력과 함께)
-python main.py -m testset -i 0 -t "살려주세요!"
+# config/config.yaml 설정 예:
+# mode: testset
+# analysis.analyze_all_testset: true
+python main.py
 ```
 
 ### 지원 파일 형식
@@ -276,7 +273,7 @@ system.use_testset("testsets/")
 
 ---
 
-## � 보안
+## 보안
 
 ### API 키 관리 (필수)
 
@@ -291,7 +288,7 @@ config/config.yaml에 API 키 저장
 
 # 방법 1: 환경 변수 (권장)
 export OPENAI_API_KEY=sk-your-key-here
-python main.py -m realtime
+python main.py --mode realtime
 
 # 방법 2: .env 파일 (로컬 개발)
 cp .env.example .env
@@ -331,6 +328,6 @@ cp config/config.yaml.example config/config.yaml
 
 ---
 
-## �📄 라이선스
+## 라이선스
 
 MIT License

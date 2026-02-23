@@ -22,6 +22,12 @@ from typing import Any, Optional
 
 import yaml
 
+try:
+    from dotenv import load_dotenv
+except ImportError:
+    def load_dotenv(*_args, **_kwargs):
+        return False
+
 # 프로젝트 루트 경로 찾기
 def _find_project_root() -> Path:
     """프로젝트 루트 디렉토리 찾기"""
@@ -47,14 +53,17 @@ PROJECT_ROOT = _find_project_root()
 CONFIG_DIR = PROJECT_ROOT / 'config'
 CONFIG_PATH = CONFIG_DIR / 'config.yaml'
 ENV_PATH = CONFIG_DIR / '.env'
+ACTIVE_CONFIG_PATH = CONFIG_PATH
+ACTIVE_ENV_PATH = ENV_PATH
 
 
-def load_config() -> dict:
+def load_config(config_path: Optional[Path] = None) -> dict:
     """config.yaml 파일 로드"""
-    if CONFIG_PATH.exists():
-        with open(CONFIG_PATH, 'r', encoding='utf-8') as f:
+    target = Path(config_path) if config_path else ACTIVE_CONFIG_PATH
+    if target.exists():
+        with open(target, 'r', encoding='utf-8') as f:
             return yaml.safe_load(f) or {}
-    print(f"⚠️  설정 파일을 찾을 수 없습니다: {CONFIG_PATH}")
+    print(f"⚠️  설정 파일을 찾을 수 없습니다: {target}")
     return {}
 
 
@@ -83,15 +92,71 @@ def get_config(*keys, default=None) -> Any:
     return result
 
 
-def reload_config():
+def reload_config(config_path: Optional[Path] = None):
     """설정 다시 로드"""
     global config
-    config = load_config()
+    config = load_config(config_path)
     return config
 
 
 # 전역 설정 객체
 config = load_config()
+
+
+def set_config_path(
+    config_path: Path,
+    *,
+    auto_reload: bool = True,
+    load_env_file: bool = True,
+) -> dict:
+    """
+    런타임 설정 파일 경로를 교체.
+    외부 통합 시스템에서 custom config를 사용할 때 호출.
+    """
+    global ACTIVE_CONFIG_PATH, ACTIVE_ENV_PATH
+
+    ACTIVE_CONFIG_PATH = Path(config_path).resolve()
+    ACTIVE_ENV_PATH = ACTIVE_CONFIG_PATH.parent / '.env'
+
+    if load_env_file and ACTIVE_ENV_PATH.exists():
+        load_dotenv(ACTIVE_ENV_PATH, override=False)
+
+    if auto_reload:
+        return reload_config(ACTIVE_CONFIG_PATH)
+    return config
+
+
+def set_runtime_config(
+    runtime_config: Optional[dict] = None,
+    *,
+    config_path: Optional[Path] = None,
+    merge: bool = False,
+    load_env_file: bool = True,
+) -> dict:
+    """
+    런타임 설정 주입.
+    - config_path가 있으면 ACTIVE_CONFIG_PATH/ENV_PATH를 갱신
+    - runtime_config가 있으면 전역 config를 직접 주입 (merge 선택 가능)
+    """
+    global config
+
+    if config_path is not None:
+        set_config_path(config_path, auto_reload=False, load_env_file=load_env_file)
+    elif load_env_file and ACTIVE_ENV_PATH.exists():
+        load_dotenv(ACTIVE_ENV_PATH, override=False)
+
+    if runtime_config is None:
+        config = load_config(ACTIVE_CONFIG_PATH)
+        return config
+
+    if merge:
+        merged = dict(config)
+        merged.update(runtime_config)
+        config = merged
+    else:
+        config = dict(runtime_config)
+
+    return config
 
 
 def get_api_key(service: str = 'openai') -> Optional[str]:
@@ -104,12 +169,9 @@ def get_api_key(service: str = 'openai') -> Optional[str]:
     Returns:
         API 키 문자열 또는 None
     """
-    import os
-    from dotenv import load_dotenv
-    
     # .env 파일 로드
-    if ENV_PATH.exists():
-        load_dotenv(ENV_PATH)
+    if ACTIVE_ENV_PATH.exists():
+        load_dotenv(ACTIVE_ENV_PATH, override=False)
     
     # 환경변수 이름 매핑
     env_var_names = {
@@ -159,8 +221,8 @@ if __name__ == "__main__":
     print("=" * 60)
     
     print(f"\n📁 프로젝트 루트: {PROJECT_ROOT}")
-    print(f"📁 설정 파일: {CONFIG_PATH}")
-    print(f"📁 설정 파일 존재: {CONFIG_PATH.exists()}")
+    print(f"📁 설정 파일: {ACTIVE_CONFIG_PATH}")
+    print(f"📁 설정 파일 존재: {ACTIVE_CONFIG_PATH.exists()}")
     
     print(f"\n📋 전체 설정 키: {list(config.keys())}")
     

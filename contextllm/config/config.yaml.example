@@ -3,28 +3,33 @@
 # config.yaml은 .gitignore에 등록되어 있으므로 리포지토리에 커밋되지 않습니다.
 
 # API 키 설정 (방법 중 하나를 선택)
-# 방법 1: config/config.yaml의 api_keys.openai에 입력
-# 방법 2: config/.env 파일에 OPENAI_API_KEY=sk-... 형식으로 입력
-# 방법 3: 환경변수로 설정 (export OPENAI_API_KEY=sk-...)
+# 1) config/config.yaml의 api_keys.openai
+# 2) config/.env 의 OPENAI_API_KEY
+# 3) 셸 환경변수 OPENAI_API_KEY
 
 # 권장: 방법 2 또는 3 (환경변수 사용 권장)
 api_keys:
   openai: ""  # 또는 여기에 입력: sk-...
 
 # 모델 설정
+mode: realtime  # realtime | testset | file | webcam | network
 model: gpt-4o-mini  # gpt-4o-mini 또는 gpt-4o
 
 # 영상 설정
 video:
   camera_id: 0                  # 웹캠 ID (0: 기본 카메라)
   testset_path: "testsets"      # 테스트셋 폴더 경로
+  network_url: ""               # 네트워크 카메라 URL (mode=network)
+  file_path: ""                 # 분석 파일 경로 (mode=file)
   resolution:
     width: 1280
     height: 720
 
 # 분석 설정
 analysis:
+  default_text: ""              # 음성 대신 사용할 기본 텍스트
   iterations: null              # null: 무한 반복, 숫자: N회 반복
+  analyze_all_testset: false    # testset 모드에서 전체 파일 분석
   parallel: false               # 호환 옵션 (현재는 순차 모니터링과 동일)
   voice_characteristics: true   # 음성 특성 분석 활성화
   streaming: false              # OpenAI 응답 스트리밍
@@ -40,7 +45,7 @@ downsampling:
 
 # 표시 설정
 display:
-  web_enabled: true             # 웹 대시보드 활성화
+  web_enabled: false            # 웹 대시보드 활성화
   web_port: 5000                # 웹 대시보드 포트 (localhost만)
   opencv_live: true             # OpenCV 라이브 디스플레이 (라이브 모드만)
 
@@ -49,6 +54,13 @@ logging:
   verbose: false                # 상세 로그 출력
   save_logs: true               # 로그 파일 저장
   log_dir: "data/logs"
+
+# 음성 인식 설정
+speech:
+  enabled: true                 # true: 음성 트리거 사용, false: 음성 비활성
+  energy_threshold: 400         # 음성 감지 민감도 (낮을수록 민감)
+  pause_threshold: 3.0          # 문장 끝 판단 무음 시간(초)
+  dynamic_threshold: false      # 동적 임계값 사용 여부
 
 # 음성 특성 분석 임계값
 voice_analysis:
