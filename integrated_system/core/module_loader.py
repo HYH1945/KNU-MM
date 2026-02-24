@@ -25,22 +25,31 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 # ── 원본 모듈 폴더 경로 ──
 def _resolve_detect_dir() -> Path:
     """
-    Detection_CCTV 폴더명을 우선 탐색하고, 레거시 오타(Detaction_CCTV)도 하위 호환.
+    Detection_CCTV 폴더를 탐색. _archive/ 이동 후에도 호환.
     """
     candidates = (
+        PROJECT_ROOT / "_archive" / "Detection_CCTV",
+        PROJECT_ROOT / "_archive" / "Detaction_CCTV",
         PROJECT_ROOT / "Detection_CCTV",
         PROJECT_ROOT / "Detaction_CCTV",
     )
     for path in candidates:
         if path.exists():
             return path
-    # 기존 동작 유지: 레거시 경로 반환 (실제 import 시 에러 발생)
-    return candidates[1]
+    return candidates[0]
+
+
+def _resolve_dir(name: str) -> str:
+    """_archive/ 우선, 루트 폴백"""
+    archive = PROJECT_ROOT / "_archive" / name
+    if archive.exists():
+        return str(archive)
+    return str(PROJECT_ROOT / name)
 
 
 DETECT_DIR      = str(_resolve_detect_dir())
-MIC_DIR         = str(PROJECT_ROOT / "mic_array_Control")
-PTZ_DIR         = str(PROJECT_ROOT / "PTZcamera_Control")
+MIC_DIR         = _resolve_dir("mic_array_Control")
+PTZ_DIR         = _resolve_dir("PTZcamera_Control")
 CONTEXTLLM_DIR  = str(PROJECT_ROOT / "contextllm")
 CONTEXTLLM_SRC  = str(PROJECT_ROOT / "contextllm" / "src")
 CONTEXTLLM_CORE = str(PROJECT_ROOT / "contextllm" / "src" / "core")
