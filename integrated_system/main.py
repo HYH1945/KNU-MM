@@ -212,11 +212,23 @@ def build_system(config: dict, args) -> tuple:
 
     # --- ContextLLM ---
     llm_cfg = config.get("context_llm", {})
+    sound_cfg = config.get("sound_event", {})
     if llm_cfg.get("enabled", True) and not args.no_llm:
         llm_module = ContextLLMModule(
             event_bus=event_bus,
             model=llm_cfg.get("model", "gpt-4o-mini"),
             config_path=llm_cfg.get("config_path", "") or None,
+            ptz=ptz,
+            ptz_settle_seconds=llm_cfg.get("ptz_settle_seconds", 0.6),
+            max_doa_age_seconds=llm_cfg.get("max_doa_age_seconds", 5.0),
+            analysis_cooldown=llm_cfg.get("analysis_cooldown", 5.0),
+            non_speech_enabled=sound_cfg.get("enabled", True),
+            non_speech_min_duration=sound_cfg.get("min_audio_duration", 0.2),
+            non_speech_cooldown=sound_cfg.get("cooldown_seconds", 1.5),
+            non_speech_analyze_on_detected=sound_cfg.get("analyze_on_detected", False),
+            doa_object_mapping_enabled=llm_cfg.get("doa_object_mapping_enabled", True),
+            camera_hfov_deg=llm_cfg.get("camera_hfov_deg", 60.0),
+            doa_object_match_threshold_deg=llm_cfg.get("doa_object_match_threshold_deg", 12.0),
         )
         orch.register(llm_module)
 
@@ -231,8 +243,8 @@ def build_system(config: dict, args) -> tuple:
         orch.register(server_module)
 
     # 5. 파이프라인 정의
-    # ★ 주요 변경: context_llm은 조건 없이 항상 실행
-    #   (내부에서 사람 감지 OR 음성 텍스트 있을 때만 분석 실행)
+    # context_llm은 조건 없이 항상 실행.
+    # 내부에서 STT 텍스트/비음성 이벤트 트리거 유무를 판단해 분석 여부를 결정한다.
     orch.define_pipeline("security", [
         {"module": "yolo"},
         {"module": "context_llm"},
@@ -335,6 +347,7 @@ def run_main_loop(orch: Orchestrator, stream: SharedStreamManager, config: dict,
             if frame_count % process_every == 0:
                 results = orch.run_pipeline(pipeline_name, {
                     "frame": frame,
+                    "stream": stream,
                     "timestamp": time.time(),
                     "frame_count": frame_count,
                 })
@@ -349,6 +362,12 @@ def run_main_loop(orch: Orchestrator, stream: SharedStreamManager, config: dict,
             llm_result = results.get("context_llm", {})
             if llm_result.get("analyzed"):
                 display_llm = llm_result
+            else:
+                llm_mod = orch.get_module("context_llm")
+                if llm_mod and hasattr(llm_mod, "get_display_result"):
+                    latest_display = llm_mod.get_display_result()
+                    if latest_display:
+                        display_llm = latest_display
 
             # ─── 통합 시각화 ───
             if show_display:

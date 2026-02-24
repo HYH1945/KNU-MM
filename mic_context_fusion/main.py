@@ -128,6 +128,7 @@ class MicContextFusionApp:
             from integrated_system.core.orchestrator import Orchestrator
             from integrated_system.modules.mic_array import MicArrayModule
             from integrated_system.modules.ptz_controller import PTZPriority, UnifiedPTZController
+            from integrated_system.modules.server_reporter import ServerReporterModule
             from integrated_system.modules.stt_module import STTModule
             from integrated_system.modules.stream_manager import SharedStreamManager
         except ImportError as exc:
@@ -147,6 +148,7 @@ class MicContextFusionApp:
         stt_cfg = config.get("stt", {})
         llm_cfg = config.get("context_llm", {})
         non_speech_cfg = config.get("non_speech", {}) or {}
+        server_cfg = config.get("server", {}) or {}
 
         source = parse_camera_source(camera_cfg.get("source", 0))
         self.stream = SharedStreamManager(source).start()
@@ -180,6 +182,14 @@ class MicContextFusionApp:
             phrase_time_limit=stt_cfg.get("phrase_time_limit", 15.0),
             dynamic_threshold=stt_cfg.get("dynamic_threshold", True),
         )
+        self.server_module = None
+        if parse_bool(server_cfg.get("enabled", False), False):
+            self.server_module = ServerReporterModule(
+                event_bus=self.event_bus,
+                server_url=str(server_cfg.get("url", "") or ""),
+                timeout=parse_float(server_cfg.get("timeout", 2.0), 2.0),
+                enabled=True,
+            )
 
         # ContextLLM app/service 계층을 직접 사용해 결합 (config-first 구조 이식).
         contextllm_src = PROJECT_ROOT / "contextllm" / "src"
@@ -292,13 +302,20 @@ class MicContextFusionApp:
         else:
             self.logger.warning("STT module is not ready.")
 
+        server_ready = False
+        if self.server_module is not None:
+            server_ready = self.orchestrator.register(self.server_module)
+            if not server_ready:
+                self.logger.warning("Server reporter module is not ready.")
+
         llm_ready = self._is_llm_available()
 
         self.logger.info(
-            "Module status - mic: %s, stt: %s, llm: %s",
+            "Module status - mic: %s, stt: %s, llm: %s, web: %s",
             "ready" if mic_ready else "disabled",
             "ready" if stt_ready else "disabled",
             "ready" if llm_ready else "disabled",
+            "ready" if server_ready else ("off" if self.server_module is None else "disabled"),
         )
 
     def start(self) -> None:
@@ -512,6 +529,19 @@ class MicContextFusionApp:
                         "urgency": urgency,
                         "situation_type": situation,
                         "analysis": analysis,
+                    },
+                    source="mic_context_fusion",
+                )
+                self.event_bus.publish_simple(
+                    "llm.analysis_complete",
+                    {
+                        "result": analysis,
+                        "priority": priority,
+                        "is_emergency": bool(service_result.get("is_emergency", False)),
+                        "speech_text": text,
+                        "doa_sector": doa,
+                        "trigger_source": trigger_source,
+                        "sound_event": sound_event,
                     },
                     source="mic_context_fusion",
                 )

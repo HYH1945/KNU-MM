@@ -17,7 +17,7 @@ from typing import Optional, Dict, Any
 from types import SimpleNamespace
 from enum import IntEnum
 
-from integrated_system.core.module_loader import DETECT_DIR, import_from_file
+from integrated_system.core.module_loader import DETECT_DIR, PTZ_DIR, import_from_file
 
 logger = logging.getLogger(__name__)
 
@@ -48,6 +48,7 @@ class UnifiedPTZController:
                 - control_mode: "onvif" | "hikvision_http" | "both"
         """
         self.config = config
+        self.control_mode = str(config.get("control_mode", "onvif")).strip().lower()
         self._lock = threading.Lock()
         self._current_priority = PTZPriority.PATROL
         self._current_owner = ""
@@ -57,10 +58,12 @@ class UnifiedPTZController:
         self._onvif_mgr = None
         self._hikvision_auth = None
         self._connected = False
+        self._last_abs_pan = 0.0
+        self._last_abs_tilt = 0.0
 
     def initialize(self) -> bool:
         """PTZ 연결 초기화"""
-        control_mode = self.config.get("control_mode", "onvif")
+        control_mode = self.control_mode
 
         if control_mode in ("onvif", "both"):
             self._connected = self._init_onvif()
@@ -73,49 +76,69 @@ class UnifiedPTZController:
     def _init_onvif(self) -> bool:
         """
         ONVIF PTZ 초기화
-        [해결] 'from config import AppConfig'가 가능하도록 모듈 구조를 모사함
+        우선순위:
+        1) PTZcamera_Control/ptz_controller.py (사용자 검증 경로)
+        2) Detection_CCTV/services/ptz_controller.py (레거시 폴백)
         """
+        # 1) PTZcamera_Control 경로 우선
+        if self._init_onvif_from_ptzcamera_control():
+            return True
+
+        # 2) 레거시 Detection_CCTV 경로 폴백
+        return self._init_onvif_from_detection_cctv()
+
+    def _init_onvif_from_ptzcamera_control(self) -> bool:
+        """PTZcamera_Control 기반 ONVIF 초기화."""
+        try:
+            import os
+            _ptz_mod = import_from_file(
+                "_orig_ptzcamera_control_controller",
+                os.path.join(PTZ_DIR, "ptz_controller.py"),
+            )
+            PTZCameraController = _ptz_mod.PTZCameraController
+            self._onvif_mgr = PTZCameraController(
+                self.config.get("camera_ip", ""),
+                int(self.config.get("camera_port", 80)),
+                self.config.get("camera_user", ""),
+                self.config.get("camera_password", ""),
+            )
+            self._connected = bool(getattr(self._onvif_mgr, "is_connected", False))
+            if self._connected:
+                logger.info("[PTZ] ONVIF 연결 성공 (PTZcamera_Control)")
+            return self._connected
+        except Exception as e:
+            logger.warning(f"[PTZ] PTZcamera_Control ONVIF 초기화 실패, 레거시 경로로 폴백: {e}")
+            return False
+
+    def _init_onvif_from_detection_cctv(self) -> bool:
+        """Detection_CCTV/services/ptz_controller.py 기반 ONVIF 초기화(하위 호환)."""
         try:
             import os
             import sys
             from types import ModuleType
 
-            # --- [강력한 Mocking] config 모듈 및 AppConfig 클래스 주입 ---
             if 'config' not in sys.modules:
-                # 1. 실제 모듈 객체 생성
                 mock_mod = ModuleType('config')
-                
-                # 2. 원본 코드가 임포트하려는 AppConfig 클래스 정의
+
                 class AppConfig:
                     CAMERA_IP = self.config.get("camera_ip", "")
                     CAMERA_PORT = self.config.get("camera_port", 80)
                     CAMERA_USER = self.config.get("camera_user", "")
                     CAMERA_PASSWORD = self.config.get("camera_password", "")
 
-                # 3. 모듈에 클래스 등록
                 mock_mod.AppConfig = AppConfig
-                
-                # 4. 시스템 모듈에 주입
                 sys.modules['config'] = mock_mod
-                logger.debug("[PTZ] 가짜 config.AppConfig 클래스를 주입했습니다.")
-            # -----------------------------------------------------------
 
-            # 원본 모듈 로드
-            from integrated_system.core.module_loader import DETECT_DIR, import_from_file
             _ptz_mod = import_from_file("_orig_ptz_controller", os.path.join(DETECT_DIR, "services", "ptz_controller.py"))
             PTZCameraManager = _ptz_mod.PTZCameraManager
 
-            # 인스턴스 생성을 위한 설정 객체 (원본 클래스 사용)
             from config import AppConfig
-            config_obj = AppConfig() 
-
+            config_obj = AppConfig()
             self._onvif_mgr = PTZCameraManager(config_obj)
-            self._connected = getattr(self._onvif_mgr, '_connected', False)
-
+            self._connected = bool(getattr(self._onvif_mgr, '_connected', False))
             if self._connected:
-                logger.info("[PTZ] ONVIF 연결 성공")
+                logger.info("[PTZ] ONVIF 연결 성공 (Detection_CCTV fallback)")
             return self._connected
-
         except Exception as e:
             logger.error(f"[PTZ] ONVIF 연결 실패: {e}")
             return False
@@ -168,7 +191,13 @@ class UnifiedPTZController:
             self._last_move_time = time.time()
 
         if move_type == "absolute":
-            threading.Thread(target=self._absolute_move, args=(pan, tilt, zoom), daemon=True).start()
+            if self._hikvision_auth:
+                threading.Thread(target=self._absolute_move, args=(pan, tilt, zoom), daemon=True).start()
+            elif self._onvif_mgr:
+                # onvif 전용 환경에서는 절대이동 API가 없어, 연속이동 펄스로 근사 이동
+                threading.Thread(target=self._absolute_move_via_onvif, args=(pan, tilt, zoom), daemon=True).start()
+            else:
+                logger.warning("[PTZ] AbsoluteMove 요청 무시: 사용 가능한 PTZ 백엔드가 없습니다.")
         else:
             threading.Thread(target=self._continuous_move, args=(pan, tilt, zoom), daemon=True).start()
 
@@ -177,10 +206,9 @@ class UnifiedPTZController:
     def _continuous_move(self, pan: float, tilt: float, zoom: float):
         """
         ONVIF ContinuousMove
-        ★ 원본 PTZCameraManager.move_async() 에 위임 ★
+        ★ 원본 컨트롤러 메서드에 위임 ★
         """
-        if self._onvif_mgr:
-            self._onvif_mgr.move_async(pan, tilt, zoom)
+        self._onvif_start_move(pan, tilt, zoom)
 
     def _absolute_move(self, pan: float, tilt: float, zoom: float):
         """
@@ -213,15 +241,78 @@ class UnifiedPTZController:
         except Exception as e:
             logger.error(f"[PTZ] AbsoluteMove 오류: {e}")
 
+    def _absolute_move_via_onvif(self, pan: float, tilt: float, zoom: float):
+        """
+        onvif-only 환경용 pseudo absolute move.
+        절대 좌표 API 부재를 보완하기 위해, 목표 각도까지 연속이동을 짧게 펄스 제어한다.
+        """
+        if not self._onvif_mgr:
+            return
+
+        try:
+            target_pan = float(pan) % 360.0 if pan is not None else self._last_abs_pan
+            target_tilt = float(tilt) if tilt is not None else self._last_abs_tilt
+            target_tilt = max(-90.0, min(90.0, target_tilt))
+
+            pan_delta = ((target_pan - self._last_abs_pan + 540.0) % 360.0) - 180.0
+            tilt_delta = target_tilt - self._last_abs_tilt
+
+            pan_vel = 0.0 if abs(pan_delta) < 2.0 else max(-1.0, min(1.0, pan_delta / 90.0))
+            tilt_vel = 0.0 if abs(tilt_delta) < 2.0 else max(-1.0, min(1.0, tilt_delta / 45.0))
+            if pan_vel == 0.0 and tilt_vel == 0.0:
+                return
+
+            pan_time = abs(pan_delta) / 90.0
+            tilt_time = abs(tilt_delta) / 45.0
+            duration = max(pan_time, tilt_time)
+            duration = max(0.1, min(2.0, duration))
+
+            self._onvif_start_move(pan_vel, tilt_vel, zoom)
+            time.sleep(duration)
+            self._onvif_stop()
+
+            self._last_abs_pan = target_pan
+            self._last_abs_tilt = target_tilt
+            logger.info(
+                "[PTZ] ONVIF pseudo-absolute move: pan=%.1f tilt=%.1f (duration=%.2fs)",
+                target_pan,
+                target_tilt,
+                duration,
+            )
+        except Exception as e:
+            logger.error(f"[PTZ] ONVIF pseudo-absolute move 오류: {e}")
+
+    def _onvif_start_move(self, pan: float, tilt: float, zoom: float = 0.0) -> None:
+        if not self._onvif_mgr:
+            return
+        try:
+            if hasattr(self._onvif_mgr, "move_async"):
+                self._onvif_mgr.move_async(pan, tilt, zoom)
+            elif hasattr(self._onvif_mgr, "start_continuous_move"):
+                self._onvif_mgr.start_continuous_move(pan, tilt)
+            else:
+                logger.warning("[PTZ] ONVIF 컨트롤러에 연속 이동 메서드가 없습니다.")
+        except Exception as e:
+            logger.error(f"[PTZ] ONVIF 연속 이동 오류: {e}")
+
+    def _onvif_stop(self) -> None:
+        if not self._onvif_mgr:
+            return
+        try:
+            if hasattr(self._onvif_mgr, "stop"):
+                self._onvif_mgr.stop()
+            elif hasattr(self._onvif_mgr, "stop_move"):
+                self._onvif_mgr.stop_move()
+        except Exception as e:
+            logger.error(f"[PTZ] ONVIF 정지 오류: {e}")
+
     def stop(self) -> None:
         """PTZ 정지"""
         with self._lock:
             self._current_priority = PTZPriority.PATROL
             self._current_owner = ""
 
-        # ★ 원본 PTZCameraManager.stop() 에 위임 ★
-        if self._onvif_mgr:
-            self._onvif_mgr.stop()
+        self._onvif_stop()
 
     def release_control(self, owner: str) -> None:
         """PTZ 제어권 반환"""

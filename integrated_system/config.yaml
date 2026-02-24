@@ -50,7 +50,12 @@ mic_array:
 context_llm:
   enabled: true
   model: "gpt-4o-mini"              # OpenAI 모델 (gpt-4o-mini, gpt-4o)
+  ptz_settle_seconds: 0.6           # DOA/PTZ 이동 후 프레임 캡처 전 대기
+  max_doa_age_seconds: 5.0          # 이 시간 이내 DOA만 PTZ 정렬에 사용
   analysis_cooldown: 5.0            # 분석 쿨다운 (초) - API 과호출 방지
+  doa_object_mapping_enabled: true  # DOA 기준 객체 각도 매핑 컨텍스트 사용
+  camera_hfov_deg: 60.0             # 카메라 수평 시야각(도)
+  doa_object_match_threshold_deg: 12.0  # DOA 근접 객체 판정 각도 임계값(도)
   config_path: ""                   # contextllm config 경로 (빈값이면 자동 탐색)
 
 # -----------------------------------------------------------
@@ -65,6 +70,16 @@ stt:
   dynamic_threshold: true           # 동적 에너지 임계값 (주변소음 자동 적응)
 
 # -----------------------------------------------------------
+# 비음성 이벤트(YAMNet) 연동 설정
+# STT 인식 실패 오디오(stt.non_speech_audio)를 ContextLLM 분석 트리거로 사용
+# -----------------------------------------------------------
+sound_event:
+  enabled: true
+  min_audio_duration: 0.2           # 이보다 짧은 오디오는 노이즈로 간주
+  cooldown_seconds: 1.5             # 비음성 트리거 쿨다운
+  analyze_on_detected: false        # false=triggered 이벤트만, true=감지 이벤트 전부 분석
+
+# -----------------------------------------------------------
 # 서버 전송 설정
 # -----------------------------------------------------------
 server:
@@ -76,7 +91,8 @@ server:
 # 파이프라인 설정
 # -----------------------------------------------------------
 pipeline:
-  # 기본 파이프라인: YOLO → (사람 감지 시) → ContextLLM → (항상) → ServerReporter
+  # 기본 파이프라인: YOLO → ContextLLM → ServerReporter
+  # ContextLLM은 내부적으로 STT 텍스트/비음성 이벤트 트리거가 있을 때만 실제 분석 수행
   default: "security"
   
   # 프레임 스킵 (N프레임마다 1회 파이프라인 실행, 성능 최적화)

@@ -51,6 +51,11 @@ context_llm:
   # Leave empty to auto-use contextllm/config/config.yaml
   config_path: ""
 
+server:
+  enabled: true
+  url: "http://localhost:8000/event"
+  timeout: 2.0
+
 openai:
   # Optional: API key can be set here for this fusion runner.
   # Recommended for teams: leave empty and use .env or --openai-api-key.

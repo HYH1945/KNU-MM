@@ -159,6 +159,7 @@ class YOLODetectionModule(BaseModule):
                 "objects": sorted_objects,
                 "count": len(sorted_objects),
                 "mode": mode,
+                "target": target,
             })
             if person_detected:
                 self.emit("yolo.person_detected", {

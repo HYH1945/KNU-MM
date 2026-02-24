@@ -182,6 +182,7 @@ python main.py --config my_config.yaml
 "mic.speech_detected"     # MicArray → 음성 감지 (DOA 각도 포함)
 "mic.doa_detected"        # MicArray → 음원 방향 확정
 "stt.text_recognized"     # STT → 음성→텍스트 변환 완료
+"stt.non_speech_audio"    # STT → 인식 실패 오디오(비음성 후보)
 "yolo.person_detected"    # YOLO → 사람 감지
 "yolo.objects_detected"   # YOLO → 객체 목록
 "llm.analysis_complete"   # LLM → 분석 완료
@@ -211,13 +212,17 @@ EMERGENCY(3) > YOLO_TRACKING(2) > MIC_DOA(1) > PATROL(0)
 
 ### 분석 트리거 조건
 
-ContextLLM은 다음 중 하나라도 충족하면 분석을 실행합니다:
+ContextLLM은 다음 트리거 중 하나라도 충족하면 분석을 실행합니다:
 
 | 트리거 | 소스 | 분석 방식 |
 |--------|------|-----------|
-| 사람 감지 | YOLO | 영상만 분석 ("현재 상황을 분석하세요") |
-| 음성 인식 | STT | 음성+영상 통합 분석 (STT 텍스트 + 프레임) |
-| 사람 + 음성 | YOLO + STT | 최고 품질 통합 분석 |
+| 음성 인식 | STT (`stt.text_recognized`) | 음성+영상 통합 분석 (STT 텍스트 + 프레임) |
+| 비음성 위험음 | STT + YAMNet (`stt.non_speech_audio`) | 비음성 이벤트+영상 통합 분석 |
+| 사람 + 음성/비음성 | YOLO + STT | 영상 맥락 강화 통합 분석 |
+
+멀티모달로 전달되는 YOLO 정보:
+- 기존: `person_detected` 여부만 전달
+- 현재: `person_detected`, 객체 수, 주요 객체 라벨/신뢰도, 추적 모드/타겟 요약까지 컨텍스트로 전달
 
 ---
 
