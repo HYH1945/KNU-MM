@@ -231,6 +231,7 @@ def build_system(config: dict, args) -> tuple:
     if llm_cfg.get("enabled", True) and not args.no_llm:
         llm_module = ContextLLMModule(
             event_bus=event_bus,
+            ptz=ptz,
             model=llm_cfg.get("model", "gpt-4o-mini"),
             config_path=llm_cfg.get("config_path", "") or None,
             spatial_context=spatial_context,

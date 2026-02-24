@@ -1,4 +1,4 @@
-# Python 3.10.19 - 음성 인식 + LLM 컨텍스트 분석 시스템 의존성
+# Python 3.10 - 음성 인식 + LLM 컨텍스트 분석 시스템 의존성
 # pip install -r requirements.txt
 
 # 음성 인식 - OpenAI Whisper
@@ -6,13 +6,13 @@ openai-whisper==20250625
 
 # 🌟 실시간 음성 인식 - SpeechRecognition (무료 버전)
 SpeechRecognition==3.14.5
-pyaudio==0.2.14
+# pyaudio==0.2.14 (Conda나 Homebrew로 이미 해결함)
 
 # 🌟 실시간 스트리밍 - Google Cloud Speech-to-Text (선택사항)
 # google-cloud-speech==2.21.0
 
 # HTTP 요청 - 외부 API 통신
-requests==2.32.5
+requests>=2.32.0
 
 # REST API 서버
 flask==3.0.0
@@ -20,12 +20,15 @@ flask-socketio>=5.3.0
 
 # OpenAI API 클라이언트 (ChatGPT 분석용)
 openai>=1.0.0
+pydantic>=2.0.0  # 🔥 의존성 무한루프(백트래킹) 방지용 추가!
 
 # 환경 변수 관리
 python-dotenv>=1.0.0
 
-# 수치 연산 라이브러리
-numpy==2.2.6
+# 수치 연산 라이브러리 (Numba 등과의 호환성을 위해 범위 지정)
+numpy>=1.26.0,<3.0.0
+librosa>=0.10.2
+soundfile>=0.12.1
 
 # 🎥 컴퓨터 비전 - OpenCV (카메라 모니터링용)
 opencv-python>=4.8.0
@@ -34,35 +37,39 @@ opencv-python>=4.8.0
 Pillow>=10.0.0
 
 # 토크나이저 - LLM 토큰 계산
-tiktoken==0.12.0
+tiktoken>=0.12.0
 
 # 머신 러닝 프레임워크
 torch==2.10.0
 
+# TensorFlow (YAMNet용) - macOS는 tensorflow-macos 사용
+tensorflow-macos>=2.16.0; platform_system=="Darwin"
+tensorflow>=2.16.0; platform_system!="Darwin"
+tensorflow-hub>=0.16.1
+tensorflow-metal>=1.1.0; platform_system=="Darwin"
+
 # JIT 컴파일러 (Whisper 음성 처리 최적화)
-numba==0.63.1
+numba>=0.59.0
 
 # 숫자 정규표현식
-regex==2026.1.15
+regex>=2024.1.0
 
 # 진행 표시줄
-tqdm==4.67.1
+tqdm>=4.66.0
 
-# 기타 의존성
-certifi==2026.1.4
-charset-normalizer==3.4.4
-filelock==3.20.3
-fsspec==2026.1.0
-idna==3.11
-Jinja2==3.1.6
-llvmlite==0.46.0
-MarkupSafe==3.0.3
-more-itertools==10.8.0
-mpmath==1.3.0
-networkx==3.4.2
-sympy==1.14.0
-typing-extensions==4.15.0
-urllib3==2.6.3
-
-# 설정 파일 파싱
+# --- 여기서부터 아래는 충돌 방지를 위해 == 대신 >= 사용 ---
+certifi>=2024.2.0
+charset-normalizer>=3.3.0
+filelock>=3.13.0
+fsspec>=2024.2.0
+idna>=3.6
+Jinja2>=3.1.3
+llvmlite>=0.42.0
+MarkupSafe>=2.1.5
+more-itertools>=10.2.0
+mpmath>=1.3.0
+networkx>=3.2.0
+sympy>=1.12.0
+typing-extensions>=4.10.0
+urllib3>=2.2.0
 PyYAML>=6.0

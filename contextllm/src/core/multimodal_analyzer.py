@@ -16,13 +16,15 @@
 """
 
 import os
-import sys
 import json
 import base64
+import logging
 from datetime import datetime
 from pathlib import Path
 from typing import Optional, Dict, Any, Union
 import numpy as np
+
+logger = logging.getLogger(__name__)
 
 try:
     from openai import OpenAI
@@ -71,6 +73,20 @@ except ImportError:
 
 class MultimodalAnalyzer:
     """멀티모달 컨텍스트 분석기 (오디오 + 비전)"""
+    PRIORITY_ORDER = ("CRITICAL", "HIGH", "MEDIUM", "LOW")
+    _LEVEL_MAP = {
+        "critical": "CRITICAL",
+        "긴급": "CRITICAL",
+        "매우높음": "CRITICAL",
+        "high": "HIGH",
+        "높음": "HIGH",
+        "medium": "MEDIUM",
+        "중간": "MEDIUM",
+        "보통": "MEDIUM",
+        "low": "LOW",
+        "낮음": "LOW",
+        "일반": "LOW",
+    }
     
     # 기본 시스템 프롬프트 (config가 없을 때 사용)
     DEFAULT_SYSTEM_PROMPT = """당신은 음성, 이미지, 음성 특성을 종합적으로 분석하는 상황 분석 AI입니다.
@@ -133,9 +149,21 @@ class MultimodalAnalyzer:
         self.client = OpenAI(api_key=self.api_key)
         
         # 음성 특성 분석기 초기화 (config에서 설정 확인)
-        analysis_cfg = get_config('analysis', default={})
-        self.use_voice_characteristics = analysis_cfg.get('voice_characteristics', True)
-        self.use_streaming = analysis_cfg.get('streaming', False)
+        analysis_cfg = get_config('analysis', default={}) or {}
+        voice_cfg = get_config('voice_characteristics', default={}) or {}
+        streaming_cfg = get_config('streaming', default={}) or {}
+
+        analysis_voice = analysis_cfg.get('voice_characteristics')
+        legacy_voice = voice_cfg.get('enabled')
+        self.use_voice_characteristics = analysis_voice if analysis_voice is not None else legacy_voice
+        if self.use_voice_characteristics is None:
+            self.use_voice_characteristics = True
+
+        analysis_streaming = analysis_cfg.get('streaming')
+        legacy_streaming = streaming_cfg.get('enabled')
+        self.use_streaming = analysis_streaming if analysis_streaming is not None else legacy_streaming
+        if self.use_streaming is None:
+            self.use_streaming = False
         
         if VOICE_ANALYSIS_AVAILABLE and self.use_voice_characteristics:
             self.voice_analyzer = VoiceCharacteristicsAnalyzer()
@@ -149,6 +177,7 @@ class MultimodalAnalyzer:
         self.max_tokens = get_openai_config('max_tokens', default=800)
         self.temperature = get_openai_config('temperature', default=0.3)
         self.image_detail = get_openai_config('image_detail', default='low')
+        self.timeout = get_openai_config('timeout', default=30)
     
     def encode_image_to_base64(self, image_source: Union[str, np.ndarray], max_size: int = 1024) -> str:
         """
@@ -209,6 +238,57 @@ class MultimodalAnalyzer:
         
         else:
             raise TypeError("image_source는 파일 경로(str) 또는 numpy array여야 합니다")
+
+    def _normalize_level(self, value: Any, default: str = "LOW") -> str:
+        if value is None:
+            return default
+        normalized = str(value).strip().upper()
+        if normalized in self.PRIORITY_ORDER:
+            return normalized
+        mapped = self._LEVEL_MAP.get(str(value).strip().lower())
+        return mapped if mapped else default
+
+    def _normalize_analysis_result(self, result: Dict[str, Any]) -> Dict[str, Any]:
+        """LLM 응답 스키마를 통일."""
+        normalized = dict(result or {})
+
+        raw_priority = normalized.get("priority")
+        raw_urgency = normalized.get("urgency")
+        priority = self._normalize_level(raw_priority, default="LOW")
+        urgency = self._normalize_level(raw_urgency, default=priority)
+
+        # urgency/priority 중 하나만 와도 양쪽을 채워 통합 시스템에서 재사용 가능하게 유지.
+        if raw_priority is None and raw_urgency is not None:
+            priority = self._normalize_level(raw_urgency, default=priority)
+        if raw_urgency is None and raw_priority is not None:
+            urgency = self._normalize_level(raw_priority, default=urgency)
+
+        is_emergency = bool(normalized.get("is_emergency", False))
+        if priority in {"CRITICAL", "HIGH"}:
+            is_emergency = True
+        if is_emergency and priority in {"LOW", "MEDIUM"}:
+            priority = "HIGH"
+            urgency = "HIGH"
+
+        normalized["priority"] = priority
+        normalized["urgency"] = urgency
+        normalized["is_emergency"] = is_emergency
+
+        # 공통 필드 기본값 보정
+        normalized.setdefault("context", "")
+        normalized.setdefault("situation", "")
+        normalized.setdefault("situation_type", "UNKNOWN")
+        normalized.setdefault("emotional_state", "NEUTRAL")
+        normalized.setdefault("visual_content", "")
+        normalized.setdefault("audio_visual_consistency", "UNKNOWN")
+        normalized.setdefault("action", "모니터링 지속")
+
+        if not normalized["is_emergency"]:
+            normalized["emergency_reason"] = None
+        else:
+            normalized.setdefault("emergency_reason", normalized.get("urgency_reason") or "위험 징후 감지")
+
+        return normalized
     
     def analyze_with_image(
         self, 
@@ -246,9 +326,13 @@ class MultimodalAnalyzer:
             else:
                 print("⚠️  음성 특성 분석 정보 없음")
             
-            user_message += f"""
+            user_message += """
 **3. 영상:**
 제공된 이미지를 분석하여 위 음성과 음성 특성과 함께 전체 상황을 판단해주세요.
+
+**4. 언어 규칙:**
+JSON 키 이름은 그대로 유지하고, 모든 서술형 값은 반드시 한국어로 작성하세요.
+영어 문장으로 답하지 마세요(불가피한 고유명사 제외).
 """
             
             # 메시지 구성
@@ -284,7 +368,8 @@ class MultimodalAnalyzer:
                     messages=messages,
                     max_tokens=self.max_tokens,
                     temperature=self.temperature,
-                    stream=True
+                    stream=True,
+                    timeout=self.timeout,
                 )
                 for chunk in response:
                     if chunk.choices[0].delta.content:
@@ -297,30 +382,31 @@ class MultimodalAnalyzer:
                     model=self.model,
                     messages=messages,
                     max_tokens=self.max_tokens,
-                    temperature=self.temperature
+                    temperature=self.temperature,
+                    timeout=self.timeout,
                 )
                 content = response.choices[0].message.content
             
             # 안전 정책 거부 감지
             if content and ("I'm sorry" in content or "I can't assist" in content or "I cannot" in content):
-                print(f"⚠️  OpenAI 안전 정책으로 인한 분석 거부")
+                print("⚠️  OpenAI 안전 정책으로 인한 분석 거부")
                 print(f"   원본 응답: {content}")
-                return {
+                return self._normalize_analysis_result({
                     'context': '이미지 내용을 분석할 수 없음 (안전 정책)',
-                    'urgency': '낮음',
+                    'urgency': 'LOW',
                     'urgency_reason': 'OpenAI 안전 정책으로 인한 분석 제한',
                     'situation': '이미지가 안전 정책에 위배되거나 분석이 제한되었습니다.',
-                    'situation_type': '분석 제한',
-                    'emotional_state': '중립',
+                    'situation_type': 'UNKNOWN',
+                    'emotional_state': 'NEUTRAL',
                     'visual_content': '분석 불가',
-                    'audio_visual_consistency': 'N/A',
+                    'audio_visual_consistency': 'UNKNOWN',
                     'action': '다른 이미지로 다시 시도하거나 이미지 내용을 확인하세요',
                     'is_emergency': False,
                     'emergency_reason': None,
                     'priority': 'LOW',
                     'error': '안전 정책 거부',
                     'raw_response': content
-                }
+                })
             
             # JSON 파싱
             try:
@@ -339,22 +425,19 @@ class MultimodalAnalyzer:
                     'error': 'JSON 파싱 실패',
                     'raw_response': content,
                     'context': '분석 오류',
+                    'urgency': 'LOW',
                     'is_emergency': False,
                     'priority': 'LOW'
                 }
             
-            # LLM의 판단을 그대로 사용 (별도 조정 없음)
-            # LLM이 이미 음성 특성을 고려해서 판단했으므로 신뢰
-            if 'urgency' in result:
-                del result['urgency']
-            
-            return result
+            return self._normalize_analysis_result(result)
         
         except Exception as e:
-            print(f"❌ 멀티모달 분석 오류: {e}")
+            logger.exception("Multimodal analysis failed")
             return {
                 'error': str(e),
                 'context': '분석 실패',
+                'urgency': 'LOW',
                 'is_emergency': False,
                 'priority': 'LOW'
             }

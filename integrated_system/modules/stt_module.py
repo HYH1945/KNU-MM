@@ -12,6 +12,7 @@ STT (Speech-to-Text) 모듈 - 음성 인식 및 텍스트 변환
 
 이벤트 발행:
     - stt.text_recognized   : 음성→텍스트 변환 완료 시
+    - stt.non_speech_audio  : 음성은 감지됐으나 텍스트 변환 불가(비명, 소음 등)
     - stt.listening_started  : 음성 대기 시작
     - stt.listening_stopped  : 음성 대기 종료
 
@@ -192,8 +193,14 @@ class STTModule(BaseModule):
                             audio, language=self.language
                         )
                     except sr.UnknownValueError:
-                        # 음성은 감지됐지만 인식 불가
-                        logger.debug("[STT] 음성 감지됨 (인식 불가)")
+                        # 음성은 감지됐지만 인식 불가 -> 비음성 소리 이벤트 발행 (YAMNet 연동용)
+                        logger.debug("[STT] 음성 감지됨 (인식 불가) -> stt.non_speech_audio 이벤트 발행")
+                        self.emit("stt.non_speech_audio", {
+                            "audio": audio,
+                            "timestamp": time.time(),
+                            "duration": duration,
+                            "doa_angle": self._current_doa,
+                        })
                         continue
                     except sr.RequestError as e:
                         logger.error(f"[STT] Google API 오류: {e}")

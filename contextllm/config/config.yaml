@@ -1,6 +1,7 @@
 # ============================================================
 # Context LLM 통합 설정 파일
-# CLI 인자로 덮어쓸 수 있습니다 (CLI > config.yaml > 기본값)
+# config-first 실행: 대부분의 실행 옵션을 이 파일에서 관리합니다.
+# (CLI는 --config, --mode, --show-config 정도만 사용)
 # ============================================================
 
 # -----------------------------------------------------------
@@ -18,7 +19,7 @@ api_keys:
 # 기본 설정
 # -----------------------------------------------------------
 mode: testset  # realtime, testset, file, webcam, network
-model: gpt-4o-mini  # gpt-4o-mini, gpt-4o, gpt-4-turbo
+model: gpt-4o  # gpt-4o-mini, gpt-4o, gpt-4-turbo
 
 # -----------------------------------------------------------
 # 비디오 소스 설정
@@ -47,8 +48,22 @@ analysis:
   iterations: null                # 반복 횟수 (null = 무한)
   analyze_all_testset: false      # 테스트셋 전체 분석 여부
   testset_index: 2                # 테스트셋에서 분석할 파일 인덱스
-  voice_characteristics: true     # 음성 특성 분석 (피치/에너지) - false로 하면 1-2초 빨라짐
-  streaming: true                 # 스트리밍 응답 (체감 속도 향상)
+  voice_characteristics: false    # 음성 특성 분석 (피치/에너지) - false로 하면 1-2초 빨라짐
+  streaming: false                # 스트리밍 응답 (체감 속도 향상)
+
+# -----------------------------------------------------------
+# config 기반 멀티 입력 테스트 ("" = 미입력)
+# mode: testset + media_test.enabled: true 로 사용
+# 우선순위: image_path > video_path > live camera
+# video_path만 넣으면 비디오 오디오를 자동 추출해 YAMNet/STT 분석에 사용
+# -----------------------------------------------------------
+media_test:
+  enabled: true
+  image_path: "testsets/smile.png"                  # 이미지 파일 경로
+  video_path: ""                  # 비디오 파일 경로(mp4 등)
+  audio_path: "testsets/scream_man.mp3"                  # 오디오 파일 경로(mp3/wav 등, 설정 시 video 오디오보다 우선)
+  text_input: ""                  # 오디오 파일에 STT 텍스트가 없을 때 사용할 보조 문장
+  phrase_time_limit: 6.0          # audio_path가 비어있을 때 실시간 음성 최대 수집 시간
 
 # -----------------------------------------------------------
 # 로깅 설정
@@ -72,72 +87,46 @@ display:
 prompts:
   # 시스템 프롬프트 (멀티모달 분석용)
   system: |
-    당신은 음성과 이미지를 함께 분석하는 상황 분석 AI입니다. 객관적으로 상황을 파악하고 분석하세요.
+    당신은 멀티모달 관제 분석기입니다.
+    입력은 음성 텍스트, 음성 특성 요약(선택), 이미지입니다.
+    목표는 "오탐 최소화 + 위험 상황 누락 최소화"입니다.
 
-    📢 **음성 특성 분석 정보가 제공될 때의 중요한 지시:**
-    - 음성 특성 분석 결과(높은 피치, 높은 에너지, 빠른 말 속도, 음성 떨림 등)는 사용자의 정서 상태와 상황의 심각성을 나타내는 중요한 지표입니다.
-    - 음성 특성에서 "높은 에너지", "빠른 말 속도", "음성 떨림" 등이 감지되면 이는 긴박한 상황, 극도의 스트레스, 공포, 절박함을 시사합니다.
-    - 음성 특성과 음성 내용, 그리고 영상이 일관되게 위험 신호를 나타내면 긴급 상황일 가능성이 높습니다.
+    판단 규칙:
+    1) 음성 텍스트/음성 특성/영상이 서로 일치하면 신뢰도를 높입니다.
+    2) 명시적 구조 요청(살려줘, 도와줘, 폭행, 화재, 침입, 총성 등)이 있으면 위험도를 상향합니다.
+    3) 영상에 직접 위험 징후(화재, 폭력, 쓰러짐, 출혈, 파손, 침입)가 보이면 우선순위를 상향합니다.
+    4) 증거가 부족하면 과장하지 말고 UNKNOWN 또는 LOW로 응답합니다.
 
-    ⚠️ **긴급 감지 우선순위:**
-    1. 음성 텍스트의 긴급 키워드 (살려줘, 도와줘, 긴급, 119 등)
-    2. 음성 특성의 극단적 신호 (높은 에너지 + 빠른 말속도 + 떨림)
-    3. 영상에서의 위험 신호 (화재, 폭행, 부상 등)
-    4. 이 모든 것이 일관되게 위험을 지시할 때
+    출력 규칙:
+    - markdown/code block 없이 JSON 객체만 반환
+    - JSON 키 이름은 스키마대로 유지하고, 모든 서술형 값은 반드시 한국어로 작성
+    - 영어 문장/영어 설명문 사용 금지 (불가피한 고유명사 제외)
+    - urgency와 priority는 반드시 CRITICAL/HIGH/MEDIUM/LOW 중 하나
+    - is_emergency가 false면 emergency_reason은 null
+    - 불확실하면 추측 대신 "근거 부족"을 명시
 
-    **특히 다음의 긴급 키워드와 시각적 신호에 주의하세요:**
-
-    **음성 긴급 키워드:**
-    - "살려줘", "도와줘", "긴급", "119", "경찰", "신고", "침입", "도움", "위험", "피해", "사고", "화재", "폭발", "공격"
-
-    **음성 특성 긴급 신호:**
-    - 높은 음성 에너지 + 빠른 말 속도 = 극도의 절박함/공포
-    - 음성 떨림 + 높은 피치 = 극심한 두려움/스트레스
-    - 이 신호들이 함께 나타나면 매우 위험한 상황
-
-    **시각적 긴급 신호:**
-    - 화재, 연기, 불꽃
-    - 침입자, 의심스러운 인물
-    - 쓰러진 사람, 부상
-    - 위험한 상황
-    - 혼란스러운 장면, 파괴된 환경
-
-    **멀티모달 분석 원칙:**
-    1. 음성 텍스트, 음성 특성, 시각 정보가 일치하는지 확인
-    2. 한 가지만 위험 신호를 보여도 주의 깊게 판단
-    3. 여러 신호가 일관되게 위험을 지시하면 긴급 상황일 가능성 높음
-    4. 영상이 음성 내용의 진위를 검증할 수 있는 경우 중요하게 고려
-    5. 컨텍스트를 종합하여 전체 상황 파악
-
-    다음을 JSON으로만 반환하세요 (다른 텍스트 없이):
+    반환 JSON 스키마:
     {
-      "context": "음성, 음성 특성, 이미지를 종합한 맥락 설명",
-      "urgency": "위급도 (낮음/중간/높음/긴급 중 하나)",
-      "urgency_reason": "왜 그 위급도인지 간단히 설명",
-      "situation": "상황을 2-3줄로 상세히 분석",
-      "situation_type": "상황 유형 (업무/긴급/의료응급/보안/일상/정보요청/불만/기타 등)",
-      "emotional_state": "감정 상태 (긍정/중립/부정/공포/절박/분노 등)",
-      "audio_characteristics": "음성 특성 요약 (높은 에너지, 빠른 말 속도, 음성 떨림 등)",
-      "visual_content": "이미지/비디오에서 관찰된 내용 요약",
-      "audio_visual_consistency": "음성과 시각 정보의 일치도 (일치/불일치/부분일치)",
-      "action": "권장 즉시 조치",
-      "is_emergency": true 또는 false,
-      "emergency_reason": "긴급 판정 이유 (긴급이 아니면 null)",
-      "priority": "우선순위 (CRITICAL/HIGH/MEDIUM/LOW 중 하나)"
+      "context": "종합 맥락 요약",
+      "urgency": "CRITICAL/HIGH/MEDIUM/LOW",
+      "urgency_reason": "우선순위 근거",
+      "situation": "상황 상세 설명",
+      "situation_type": "SECURITY/MEDICAL/FIRE/ACCIDENT/NORMAL/UNKNOWN",
+      "emotional_state": "CALM/ANXIOUS/PANIC/ANGRY/NEUTRAL/UNKNOWN",
+      "audio_characteristics": "음성 특성 요약",
+      "visual_content": "영상 관측 요약",
+      "audio_visual_consistency": "HIGH/MEDIUM/LOW/UNKNOWN",
+      "action": "권장 조치",
+      "is_emergency": true/false,
+      "emergency_reason": "긴급 근거",
+      "priority": "CRITICAL/HIGH/MEDIUM/LOW"
     }
 
-    📌 긴급(CRITICAL) 판정 기준 - 다음 중 하나라도 해당되면 is_emergency=true:
-    - **음성에 긴급 키워드** 포함: "살려줘", "도와줘", "119", "긴급", "경찰", "위험", "도움"
-    - **음성 특성이 극단적인 스트레스 신호** 표시: (높은 에너지 OR 빠른 말 속도) AND 음성 떨림
-    - 신체 위협 (음성 또는 시각)
-    - 재난 징후 (화재, 폭발, 붕괴 등)
-    - 범죄 현장 (침입, 강도, 폭행 등)
-    - 의료 응급 (쓰러진 사람, 부상, 심한 출혈 등)
-    - **여러 신호가 일관되게 위험을 지시** (음성 + 음성 특성 + 영상이 모두 위험)
-    - 기타 극도의 위험 상황
-    
-    ⚠️ 중요: "살려줘", "도와줘" 같은 명시적 도움 요청은 무조건 is_emergency=true로 판정하세요!
-    ⚠️ 중요: 음성 특성에서 높은 에너지와 빠른 말 속도가 동시에 감지되고 떨림도 있으면, 심각한 긴급 상황일 가능성이 매우 높습니다!
+    우선순위 기준:
+    - CRITICAL: 즉시 인명/중대 사고 위험 (폭력 진행, 화재 진행, 심각한 의료 응급 등)
+    - HIGH: 긴급 대응 필요 (의심 침입, 강한 구조 요청, 명확한 위험 징후)
+    - MEDIUM: 위험 가능성 있으나 즉시성 불명확 (지속 관찰 필요)
+    - LOW: 위험 징후 없음 또는 근거 부족
 
   # 긴급 키워드 목록
   emergency_keywords:
@@ -160,9 +149,30 @@ prompts:
 # 음성 인식 설정
 # -----------------------------------------------------------
 speech:
+  enabled: true                 # 음성 트리거 활성화 여부
   energy_threshold: 300           # 음성 감지 에너지 임계값 (낮을수록 민감, 기본값: 400)
-  pause_threshold: 3.0            # 문장 끝 판단 침묵 시간 (초, 기본값: 3.0)
+  pause_threshold: 0.8            # 문장 끝 판단 침묵 시간 (초, 기본값: 3.0)
   dynamic_threshold: false        # 동적 에너지 임계값 (false=고정/스피커용, true=자동/마이크용)
+
+# -----------------------------------------------------------
+# 비음성 사운드 이벤트 감지 설정 (YAMNet)
+# -----------------------------------------------------------
+sound_event:
+  enabled: true
+  model_url: https://tfhub.dev/google/yamnet/1
+  min_confidence: 0.12            # 이벤트 후보로 보여줄 최소 점수
+  trigger_threshold: 0.18         # 긴급 트리거 판정 임계값
+  top_k: 5                        # 상위 표시 이벤트 수
+  emergency_keywords:
+    - scream
+    - shout
+    - yell
+    - glass
+    - breaking
+    - gunshot
+    - explosion
+    - siren
+    - alarm
 
 # -----------------------------------------------------------
 # 음성 특성 분석 설정
@@ -171,20 +181,14 @@ voice_analysis:
   # 샘플링 레이트
   sample_rate: 16000
   
-  # 피치 분석 임계값 (기본값과 코드 일치해야 함)
+  # 피치 분석 임계값
   pitch:
     high_threshold: 250           # 이 이상이면 높은 피치로 판정 (Hz)
     variability_threshold: 50     # 피치 변동성 임계값 (std dev)
   
   # 에너지 분석 임계값
-  # 피치(음높이) 임계값 (Hz)
-  pitch:
-    high_threshold: 250           # 평균 피치가 이 값 이상이면 높은 피치 판정
-    variability_threshold: 50     # 피치 변동이 이 값 이상이면 떨림 판정
-
-  # 에너지(음량) 임계값
   energy:
-    high_threshold: 0.3          # 에너지 최대값이 이 값 이상이면 높은 음성 판정
+    normalization_factor: 0.5     # voice_characteristics.py에서 사용하는 정규화 계수
     volatility_threshold: 0.3     # 에너지 변동성 임계값
   
   # 음성 속도 임계값 (음절/초)
@@ -217,6 +221,6 @@ voice_analysis:
 # -----------------------------------------------------------
 openai:
   max_tokens: 800                 # 최대 응답 토큰 수
-  temperature: 0.5                # 응답 다양성 (0-1)
-  image_detail: high               # 이미지 분석 상세도 (low/high/auto)
+  temperature: 0.2                # 응답 다양성 (0-1, 낮을수록 일관성)
+  image_detail: low               # 이미지 분석 상세도 (low/high/auto)
   timeout: 30                     # API 타임아웃 (초)

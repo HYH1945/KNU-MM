@@ -8,9 +8,8 @@ import cv2
 import numpy as np
 import threading
 import time
-from typing import Optional, Dict, Any, Tuple
+from typing import Optional, Dict, Any
 from dataclasses import dataclass
-from collections import deque
 
 
 @dataclass
@@ -239,11 +238,6 @@ class OpenCVDisplay:
         cv2.putText(frame, badge_text, (badge_x, badge_y),
                    self.font, 0.8, (255, 255, 255), 2)
     
-    def is_running(self) -> bool:
-        """실행 중인지 확인"""
-        return self.running
-
-
 # 전역 인스턴스
 _display_instance: Optional[OpenCVDisplay] = None
 
