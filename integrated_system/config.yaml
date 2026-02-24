@@ -6,12 +6,12 @@
 # CCTV 카메라 설정
 # -----------------------------------------------------------
 camera:
-  rtsp_url: "rtsp://admin:***REMOVED***@***REMOVED_IP***:554/Streaming/Channels/101"                        # 0=웹캠, RTSP URL 또는 파일 경로 (env: RTSP_URL)
+  rtsp_url: ""                        # .env의 RTSP_URL 사용 (예: rtsp://user:pass@ip:554/path)
   test_video: ""                     # 테스트 영상 경로 (설정 시 rtsp_url 대신 사용)
-  ip: "***REMOVED_IP***"                            # 카메라 IP (env: CAMERA_IP)
-  port: 80                          # 카메라 포트 (env: CAMERA_PORT)
-  user: "admin"                          # 카메라 사용자 (env: CAMERA_USER)
-  password: "***REMOVED***"                      # 카메라 비밀번호 (env: CAMERA_PASSWORD)
+  ip: ""                             # .env의 CAMERA_IP 사용
+  port: 80                           # .env의 CAMERA_PORT 사용
+  user: ""                           # .env의 CAMERA_USER 사용
+  password: ""                       # .env의 CAMERA_PASSWORD 사용
 
 # -----------------------------------------------------------
 # PTZ 제어 설정

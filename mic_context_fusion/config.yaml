@@ -2,14 +2,14 @@
 
 camera:
   # 0: default webcam, RTSP URL, or video file path
-  source: "rtsp://admin:***REMOVED***@***REMOVED_IP***:554/Streaming/Channels/101"
+  source: ""                          # .env의 RTSP_URL 사용
 
 ptz:
   control_mode: "both"      # onvif | hikvision_http | both
-  ip: "***REMOVED_IP***"
+  ip: ""                    # .env의 CAMERA_IP 사용
   port: 80
-  user: "admin"
-  password: "***REMOVED***"
+  user: ""                  # .env의 CAMERA_USER 사용
+  password: ""              # .env의 CAMERA_PASSWORD 사용
   tilt_on_doa: -15
   settle_seconds: 0.6
   max_doa_age_seconds: 5.0
