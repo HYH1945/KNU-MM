@@ -492,6 +492,15 @@ class MicContextFusionApp:
                     situation,
                     text,
                 )
+                self._print_contextllm_style_result(
+                    text=text,
+                    trigger_source=trigger_source,
+                    sound_event=sound_event,
+                    analysis=analysis,
+                    priority=priority,
+                    urgency=urgency,
+                    is_emergency=bool(service_result.get("is_emergency", False)),
+                )
                 self.event_bus.publish_simple(
                     "fusion.analysis_complete",
                     {
@@ -546,6 +555,58 @@ class MicContextFusionApp:
             result.get("urgency", "N/A"),
             result.get("summary", "N/A"),
         )
+
+    def _print_contextllm_style_result(
+        self,
+        text: str,
+        trigger_source: str,
+        sound_event: Optional[Dict[str, Any]],
+        analysis: Dict[str, Any],
+        priority: str,
+        urgency: str,
+        is_emergency: bool,
+    ) -> None:
+        print("\n" + "=" * 50)
+        print("📊 분석 결과")
+        print("=" * 50)
+        print(f'📝 음성 입력: "{text}"')
+
+        if sound_event and sound_event.get("top_event"):
+            top_conf = float(sound_event.get("top_confidence", 0.0) or 0.0)
+            print("\n🔊 사운드 이벤트 분석:")
+            print(f"   - 최상위 이벤트: {sound_event.get('top_event')} ({top_conf:.2f})")
+            emergency_events = sound_event.get("emergency_events", []) or []
+            if emergency_events:
+                labels = ", ".join(
+                    f"{e.get('label', 'unknown')}({float(e.get('confidence', 0.0) or 0.0):.2f})"
+                    for e in emergency_events[:3]
+                )
+                print(f"   - 위험 후보: {labels}")
+            print(f"   - 트리거 소스: {trigger_source}")
+
+        print("\n🔍 상황 분석:")
+        print(f"   - 상황 유형: {analysis.get('situation_type', 'N/A')}")
+        print(f"   - 상황 설명: {analysis.get('situation', 'N/A')}")
+        print(f"   - 감정 상태: {analysis.get('emotional_state', 'N/A')}")
+        print(f"   - 영상 내용: {analysis.get('visual_content', 'N/A')}")
+
+        print("\n⚠️  긴급도 판단:")
+        print("   - 긴급 여부: 🚨 YES - 즉시 대응 필요!" if is_emergency else "   - 긴급 여부: ✅ 아니오")
+        print(f"   - 우선순위: {priority}")
+        print(f"   - 위급도: {urgency}")
+        print(f"   - 긴급 판단 근거: {analysis.get('emergency_reason', 'N/A')}")
+
+        print("\n🎯 음성-영상 일치도:")
+        print(f"   - 일치 여부: {analysis.get('audio_visual_consistency', 'N/A')}")
+
+        print("\n💡 권장 조치:")
+        action = analysis.get("action", "N/A")
+        print(f"   - {'🚨 긴급: ' if is_emergency else ''}{action}")
+
+        if is_emergency:
+            print("🚨" * 50 + "\n")
+        else:
+            print("=" * 50 + "\n")
 
 
 def parse_args() -> argparse.Namespace:
