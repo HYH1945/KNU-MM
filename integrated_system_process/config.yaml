@@ -1,0 +1,125 @@
+# ============================================================
+# KNU-MM 통합 멀티모달 관제 시스템 설정 파일
+# ============================================================
+
+# -----------------------------------------------------------
+# CCTV 카메라 설정
+# -----------------------------------------------------------
+camera:
+  rtsp_url: ""                        # 0=웹캠, RTSP URL 또는 파일 경로 (env 우선: CAMERA_RTSP_URL 또는 RTSP_URL)
+  test_video: ""                     # 테스트 영상 경로 (env 우선: CAMERA_TEST_VIDEO 또는 TEST_VIDEO)
+  ip: ""                            # 카메라 IP (env 우선: CAMERA_IP)
+  port: 80                          # 카메라 포트 (env 우선: CAMERA_PORT)
+  user: ""                          # 카메라 사용자 (env 우선: CAMERA_USER)
+  password: ""                      # 카메라 비밀번호 (env 우선: CAMERA_PASSWORD)
+
+# -----------------------------------------------------------
+# PTZ 제어 설정
+# -----------------------------------------------------------
+ptz:
+  control_mode: "both"             # "onvif" | "hikvision_http" | "both"
+  pid_kp: 0.8                       # PID 추적 속도 계수
+  dead_zone_pixels: 50              # 중심 데드존 (px)
+  patrol_speed: 0.2                 # 순찰 모드 속도
+
+# -----------------------------------------------------------
+# YOLO 객체 탐지 설정
+# -----------------------------------------------------------
+yolo:
+  enabled: true
+  model_path: "yolo26n.pt"          # YOLO 모델 경로
+  confidence: 0.7                   # 최소 확신도
+  target_classes: 0                 # null=모든 클래스, [0]=사람만
+  patrol_return_delay: 3.0          # 순찰 복귀 딜레이 (초)
+
+# -----------------------------------------------------------
+# 마이크 어레이 (ReSpeaker) 설정
+# -----------------------------------------------------------
+mic_array:
+  enabled: true
+  agc_max_gain: 15.0                # AGC 최대 게인
+  vad_threshold: 10.0               # VAD 문턱값
+  confidence_threshold: 0.6         # DOA 방향 신뢰도 임계값
+  zenith_confidence: 0.4            # 천정 사각지대 신뢰도
+  zenith_gain: 10.0                 # 천정 판정 게인 임계
+  history_size: 10                  # 각도 히스토리 크기
+
+# -----------------------------------------------------------
+# Context LLM 설정
+# -----------------------------------------------------------
+context_llm:
+  enabled: true
+  model: "gpt-4o-mini"              # OpenAI 모델 (gpt-4o-mini, gpt-4o)
+  ptz_settle_seconds: 0.6           # DOA/PTZ 이동 후 프레임 캡처 전 대기
+  max_doa_age_seconds: 5.0          # 이 시간 이내 DOA만 PTZ 정렬에 사용
+  analysis_cooldown: 5.0            # 분석 쿨다운 (초) - API 과호출 방지
+  doa_object_mapping_enabled: true  # DOA 기준 객체 각도 매핑 컨텍스트 사용
+  camera_hfov_deg: 60.0             # 카메라 수평 시야각(도)
+  doa_object_match_threshold_deg: 12.0  # DOA 근접 객체 판정 각도 임계값(도)
+  config_path: ""                   # contextllm config 경로 (빈값이면 자동 탐색)
+
+# -----------------------------------------------------------
+# STT (Speech-to-Text) 음성 인식 설정
+# -----------------------------------------------------------
+stt:
+  enabled: true
+  language: "ko-KR"                 # 인식 언어 (한국어)
+  energy_threshold: 400             # 음성 감지 에너지 임계값 (낮을수록 민감)
+  pause_threshold: 3.0              # 문장 끝 판단 무음 시간 (초)
+  phrase_time_limit: 15.0           # 최대 발화 시간 (초)
+  dynamic_threshold: true           # 동적 에너지 임계값 (주변소음 자동 적응)
+
+# -----------------------------------------------------------
+# 비음성 이벤트(YAMNet) 연동 설정
+# STT 인식 실패 오디오(stt.non_speech_audio)를 ContextLLM 분석 트리거로 사용
+# -----------------------------------------------------------
+sound_event:
+  enabled: true
+  min_audio_duration: 0.2           # 이보다 짧은 오디오는 노이즈로 간주
+  cooldown_seconds: 1.5             # 비음성 트리거 쿨다운
+  analyze_on_detected: false        # false=triggered 이벤트만, true=감지 이벤트 전부 분석
+
+# -----------------------------------------------------------
+# 서버 전송 설정
+# -----------------------------------------------------------
+server:
+  enabled: true
+  url: "http://localhost:8100/event"                           # 대시보드 서버 URL (예: https://xxx.ngrok-free.dev/publish)
+  timeout: 2.0                      # HTTP 전송 타임아웃 (초)
+  event_dashboard_port: 8100        # 이벤트 대시보드 포트 (dashboard_script와 연동)
+  contextllm_dashboard_port: 5100   # contextllm 대시보드 포트 (contextllm_dashboard_script와 연동)
+  auto_start_dashboard: true        # 이벤트 모니터링형 대시보드 자동 시작(기존 키)
+  auto_start_event_dashboard: true  # 이벤트 모니터링형 대시보드 자동 시작(신규 별칭)
+  dashboard_script: "integrated_system/modules/dashboard_server.py"  # 이벤트 대시보드 스크립트
+  auto_start_contextllm_dashboard: true # contextllm 웹 대시보드 자동 시작
+  contextllm_dashboard_script: "contextllm/src/web/app.py"     # contextllm 대시보드 스크립트
+  push_contextllm_dashboard: true    # 분석 결과를 contextllm 대시보드로 HTTP 푸시
+  contextllm_dashboard_url: ""       # 비우면 http://127.0.0.1:{contextllm_dashboard_port}/api/push_result 사용
+  contextllm_dashboard_timeout: 1.2
+
+# -----------------------------------------------------------
+# 파이프라인 설정
+# -----------------------------------------------------------
+pipeline:
+  # 기본 파이프라인: YOLO → ContextLLM → ServerReporter
+  # ContextLLM은 내부적으로 STT 텍스트/비음성 이벤트 트리거가 있을 때만 실제 분석 수행
+  default: "security"
+  
+  # 프레임 스킵 (N프레임마다 1회 파이프라인 실행, 성능 최적화)
+  process_every_n_frames: 3
+
+# -----------------------------------------------------------
+# 디스플레이 설정
+# -----------------------------------------------------------
+display:
+  show_opencv: true                 # OpenCV 윈도우 표시
+  window_name: "KNU-MM Integrated System"
+  show_fps: true
+  show_module_status: true
+
+# -----------------------------------------------------------
+# 로깅 설정
+# -----------------------------------------------------------
+logging:
+  level: "INFO"                     # DEBUG, INFO, WARNING, ERROR
+  file: "knu_mm_system.log"                          # 로그 파일 경로 (빈값이면 콘솔만)

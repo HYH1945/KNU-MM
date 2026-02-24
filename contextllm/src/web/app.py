@@ -11,7 +11,7 @@ import time
 import cv2
 from datetime import datetime
 from pathlib import Path
-from flask import Flask, render_template, jsonify, Response
+from flask import Flask, render_template, jsonify, Response, request
 from flask_socketio import SocketIO, emit
 
 # 프로젝트 루트 경로 추가
@@ -57,10 +57,10 @@ class DashboardServer:
         self._initialized = True
         self.server_thread = None
         self.running = False
-        self.port = 5000
+        self.port = 5100
         self.host = '127.0.0.1'
     
-    def start(self, port: int = 5000, host: str = None):
+    def start(self, port: int = 5100, host: str = None):
         """백그라운드에서 서버 시작 (localhost에만 바인드)"""
         if self.running:
             print(f"   ⚠️ 웹 대시보드가 이미 실행 중입니다: http://{self.host}:{self.port}")
@@ -195,6 +195,19 @@ def video_status():
     return jsonify({'enabled': video_streaming_enabled})
 
 
+@app.route('/api/push_result', methods=['POST'])
+def api_push_result():
+    """외부 프로세스가 분석 결과를 대시보드로 푸시"""
+    try:
+        payload = request.get_json(silent=True) or {}
+        if not isinstance(payload, dict):
+            return jsonify({'status': 'error', 'message': 'invalid_payload'}), 400
+        dashboard.push_result(payload)
+        return jsonify({'status': 'ok'})
+    except Exception as exc:
+        return jsonify({'status': 'error', 'message': str(exc)}), 500
+
+
 def generate_frames():
     """MJPEG 스트림 생성"""
     global video_frame
@@ -228,7 +241,7 @@ def handle_connect():
 
 
 # 외부에서 사용할 함수
-def start_dashboard(port: int = 5000):
+def start_dashboard(port: int = 5100):
     """대시보드 시작"""
     dashboard.start(port=port)
 
@@ -260,7 +273,8 @@ def stop_dashboard():
 if __name__ == '__main__':
     # 직접 실행 시 테스트
     print("🚀 웹 대시보드 테스트 모드")
-    dashboard.start(port=5000)
+    run_port = int(os.getenv("CONTEXTLLM_DASHBOARD_PORT", "5100"))
+    dashboard.start(port=run_port)
     
     try:
         while True:
