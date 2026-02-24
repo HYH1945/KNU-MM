@@ -31,6 +31,12 @@ soundfile>=0.12.1
 onvif-zeep>=0.2.12
 pyusb>=1.2.1
 
+# --- Dashboard auto-start dependencies ---
+fastapi>=0.111.0
+uvicorn>=0.30.0
+flask>=3.0.0
+flask-socketio>=5.3.0
+
 # --- Optional: non-speech event detection (YAMNet) ---
 tensorflow-macos>=2.16.0; platform_system=="Darwin"
 tensorflow>=2.16.0; platform_system!="Darwin"

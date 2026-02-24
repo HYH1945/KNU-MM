@@ -84,8 +84,15 @@ sound_event:
 # -----------------------------------------------------------
 server:
   enabled: true
-  url: "http://localhost:8000/event"                           # 대시보드 서버 URL (예: https://xxx.ngrok-free.dev/publish)
+  url: "http://localhost:8100/event"                           # 대시보드 서버 URL (예: https://xxx.ngrok-free.dev/publish)
   timeout: 2.0                      # HTTP 전송 타임아웃 (초)
+  event_dashboard_port: 8100        # 이벤트 대시보드 포트 (dashboard_script와 연동)
+  contextllm_dashboard_port: 5100   # contextllm 대시보드 포트 (contextllm_dashboard_script와 연동)
+  auto_start_dashboard: false       # 이벤트 모니터링형 대시보드 자동 시작(기존 키)
+  auto_start_event_dashboard: false # 이벤트 모니터링형 대시보드 자동 시작(신규 별칭)
+  dashboard_script: "integrated_system/modules/dashboard_server.py"  # 이벤트 대시보드 스크립트
+  auto_start_contextllm_dashboard: false # contextllm 웹 대시보드 자동 시작
+  contextllm_dashboard_script: "contextllm/src/web/app.py"     # contextllm 대시보드 스크립트
 
 # -----------------------------------------------------------
 # 파이프라인 설정

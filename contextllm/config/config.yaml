@@ -82,7 +82,7 @@ logging:
 # -----------------------------------------------------------
 display:
   web_enabled: true             # 웹 대시보드 자동 시작
-  web_port: 5000                  # 웹 대시보드 포트
+  web_port: 5100                  # 웹 대시보드 포트
   opencv_live: true               # 라이브 모드(webcam, network)에서 OpenCV 창 자동 활성화
   keep_open_after_run: true       # 배치 분석 종료 후 웹 대시보드 유지
 

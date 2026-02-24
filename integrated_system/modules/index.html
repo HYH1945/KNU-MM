@@ -193,7 +193,7 @@
 
     <script>
         const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-        const wsUrl = `ws://${window.location.hostname}:8000/ws/monitor`; // FastAPI 포트로 변경
+        const wsUrl = `${protocol}//${window.location.host}/ws/monitor`;
         const ws = new WebSocket(wsUrl);
 
         const pointerCam = document.getElementById('pointer');

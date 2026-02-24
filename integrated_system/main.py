@@ -35,8 +35,11 @@ import math
 import signal
 import logging
 import argparse
+import subprocess
+import socket
 import numpy as np
 from pathlib import Path
+from urllib.parse import urlparse, urlunparse
 
 import yaml
 from dotenv import load_dotenv
@@ -100,6 +103,175 @@ def setup_logging(config: dict) -> None:
         datefmt="%H:%M:%S",
         handlers=handlers,
     )
+
+
+def _to_bool(value, default: bool = False) -> bool:
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return default
+    if isinstance(value, str):
+        lowered = value.strip().lower()
+        if lowered in {"1", "true", "yes", "on"}:
+            return True
+        if lowered in {"0", "false", "no", "off"}:
+            return False
+    return bool(value)
+
+
+def _to_int(value, default: int) -> int:
+    try:
+        if value is None:
+            return int(default)
+        return int(value)
+    except (TypeError, ValueError):
+        return int(default)
+
+
+def _is_port_in_use(port: int, host: str = "127.0.0.1") -> bool:
+    if port <= 0:
+        return False
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.settimeout(0.3)
+        return sock.connect_ex((host, int(port))) == 0
+
+
+def _resolve_script_path(script_value: str) -> Path:
+    path = Path(script_value)
+    if not path.is_absolute():
+        path = (PROJECT_ROOT / path).resolve()
+    return path
+
+
+def _start_dashboard_process(
+    script_path: Path,
+    label: str,
+    logger: logging.Logger,
+    env: dict | None = None,
+):
+    if not script_path.exists():
+        logger.warning("[%s] 자동 시작 실패: 스크립트 없음 (%s)", label, script_path)
+        return None
+
+    try:
+        proc = subprocess.Popen(
+            [sys.executable, str(script_path)],
+            cwd=str(PROJECT_ROOT),
+            env=env or os.environ.copy(),
+        )
+        time.sleep(0.5)
+        if proc.poll() is not None:
+            logger.warning(
+                "[%s] 자동 시작 실패: 프로세스 즉시 종료 (코드=%s)",
+                label,
+                proc.returncode,
+            )
+            return None
+        logger.info("[%s] 자동 시작됨 (pid=%s, script=%s)", label, proc.pid, script_path)
+        return proc
+    except Exception as exc:
+        logger.warning("[%s] 자동 시작 실패: %s", label, exc)
+        return None
+
+
+def _sync_server_url_with_event_port(config: dict, event_port: int, logger: logging.Logger) -> None:
+    if event_port <= 0:
+        return
+    server_cfg = config.setdefault("server", {})
+    current_url = str(server_cfg.get("url", "") or "").strip()
+    if not current_url:
+        server_cfg["url"] = f"http://localhost:{event_port}/event"
+        return
+
+    parsed = urlparse(current_url)
+    if parsed.scheme not in {"http", "https"}:
+        return
+    if parsed.hostname not in {"localhost", "127.0.0.1"}:
+        return
+    if parsed.path not in {"", "/", "/event"}:
+        return
+
+    needs_update = (parsed.port or 80) != int(event_port)
+    if not needs_update:
+        return
+    new_netloc = f"{parsed.hostname}:{event_port}"
+    updated = parsed._replace(netloc=new_netloc, path="/event")
+    new_url = urlunparse(updated)
+    server_cfg["url"] = new_url
+    logger.info("[EventDashboard] server.url 자동 동기화: %s", new_url)
+
+
+def _start_dashboards_if_enabled(config: dict, logger: logging.Logger):
+    server_cfg = config.get("server", {}) or {}
+    procs = []
+    started_scripts = set()
+
+    event_port = _to_int(server_cfg.get("event_dashboard_port"), 8100)
+    contextllm_port = _to_int(server_cfg.get("contextllm_dashboard_port"), 5100)
+
+    event_dashboard_enabled = (
+        _to_bool(server_cfg.get("auto_start_dashboard", False), False)
+        or _to_bool(server_cfg.get("auto_start_event_dashboard", False), False)
+    )
+    if event_dashboard_enabled:
+        _sync_server_url_with_event_port(config, event_port, logger)
+        script_path = _resolve_script_path(
+            str(server_cfg.get("dashboard_script", "integrated_system/modules/dashboard_server.py"))
+        )
+        key = str(script_path)
+        if key not in started_scripts:
+            if _is_port_in_use(event_port):
+                logger.warning(
+                    "[EventDashboard] 포트 %s 이미 사용 중입니다. 자동 시작을 건너뜁니다.",
+                    event_port,
+                )
+            else:
+                env = os.environ.copy()
+                env["EVENT_DASHBOARD_PORT"] = str(event_port)
+                proc = _start_dashboard_process(script_path, "EventDashboard", logger, env=env)
+                if proc is not None:
+                    procs.append(("EventDashboard", proc))
+                    started_scripts.add(key)
+
+    contextllm_dashboard_enabled = _to_bool(server_cfg.get("auto_start_contextllm_dashboard", False), False)
+    if contextllm_dashboard_enabled:
+        script_path = _resolve_script_path(
+            str(server_cfg.get("contextllm_dashboard_script", "contextllm/src/web/app.py"))
+        )
+        key = str(script_path)
+        if key in started_scripts:
+            logger.info("[ContextLLMDashboard] 동일 스크립트는 중복 시작하지 않습니다: %s", script_path)
+        else:
+            if _is_port_in_use(contextllm_port):
+                logger.warning(
+                    "[ContextLLMDashboard] 포트 %s 이미 사용 중입니다. 자동 시작을 건너뜁니다.",
+                    contextllm_port,
+                )
+            else:
+                env = os.environ.copy()
+                env["CONTEXTLLM_DASHBOARD_PORT"] = str(contextllm_port)
+                proc = _start_dashboard_process(script_path, "ContextLLMDashboard", logger, env=env)
+                if proc is not None:
+                    procs.append(("ContextLLMDashboard", proc))
+                    started_scripts.add(key)
+
+    return procs
+
+
+def _stop_dashboards(procs, logger: logging.Logger) -> None:
+    for label, proc in reversed(procs or []):
+        if proc is None or proc.poll() is not None:
+            continue
+        try:
+            proc.terminate()
+            proc.wait(timeout=3)
+            logger.info("[%s] 자동 시작 프로세스 종료 완료", label)
+        except Exception:
+            try:
+                proc.kill()
+                logger.info("[%s] 자동 시작 프로세스 강제 종료", label)
+            except Exception:
+                pass
 
 
 def build_system(config: dict, args) -> tuple:
@@ -583,6 +755,8 @@ def main():
     logger.info("  시각(YOLO) + 청각(MicArray+STT) → LLM 통합 분석")
     logger.info("=" * 60)
 
+    dashboard_procs = _start_dashboards_if_enabled(config, logger)
+
     # 시스템 빌드
     orch, event_bus, stream, ptz, mic_module, stt_module = build_system(config, args)
 
@@ -594,6 +768,7 @@ def main():
         orch.shutdown_all()
         stream.release()
         ptz.shutdown()
+        _stop_dashboards(dashboard_procs, logger)
         cv2.destroyAllWindows()
         sys.exit(0)
 
@@ -610,6 +785,7 @@ def main():
         orch.shutdown_all()
         stream.release()
         ptz.shutdown()
+        _stop_dashboards(dashboard_procs, logger)
         cv2.destroyAllWindows()
         logger.info("시스템 종료 완료")
 

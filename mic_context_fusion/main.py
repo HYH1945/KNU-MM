@@ -14,11 +14,14 @@ import argparse
 import logging
 import os
 import signal
+import subprocess
+import socket
 import sys
 import threading
 import time
 from pathlib import Path
 from typing import Any, Dict, Optional, Union
+from urllib.parse import urlparse, urlunparse
 
 try:
     import yaml
@@ -116,6 +119,159 @@ def parse_optional_float(value: Any) -> Optional[float]:
         return float(value)
     except (TypeError, ValueError):
         return None
+
+
+def parse_int(value: Any, default: int) -> int:
+    try:
+        if value is None:
+            return int(default)
+        return int(value)
+    except (TypeError, ValueError):
+        return int(default)
+
+
+def is_port_in_use(port: int, host: str = "127.0.0.1") -> bool:
+    if port <= 0:
+        return False
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.settimeout(0.3)
+        return sock.connect_ex((host, int(port))) == 0
+
+
+def _resolve_script_path(script_value: str) -> Path:
+    script_path = Path(script_value)
+    if not script_path.is_absolute():
+        script_path = (PROJECT_ROOT / script_path).resolve()
+    return script_path
+
+
+def _start_dashboard_process(
+    script_path: Path,
+    label: str,
+    logger: logging.Logger,
+    env: Optional[Dict[str, str]] = None,
+):
+    if not script_path.exists():
+        logger.warning("[%s] auto-start failed: script not found (%s)", label, script_path)
+        return None
+
+    try:
+        proc = subprocess.Popen(
+            [sys.executable, str(script_path)],
+            cwd=str(PROJECT_ROOT),
+            env=env or os.environ.copy(),
+        )
+        time.sleep(0.5)
+        if proc.poll() is not None:
+            logger.warning(
+                "[%s] auto-start failed: process exited early (code=%s)",
+                label,
+                proc.returncode,
+            )
+            return None
+        logger.info("[%s] auto-started (pid=%s, script=%s)", label, proc.pid, script_path)
+        return proc
+    except Exception as exc:
+        logger.warning("[%s] auto-start failed: %s", label, exc)
+        return None
+
+
+def sync_server_url_with_event_port(config: Dict[str, Any], event_port: int, logger: logging.Logger) -> None:
+    if event_port <= 0:
+        return
+    server_cfg = config.setdefault("server", {})
+    current_url = str(server_cfg.get("url", "") or "").strip()
+    if not current_url:
+        server_cfg["url"] = f"http://localhost:{event_port}/event"
+        return
+
+    parsed = urlparse(current_url)
+    if parsed.scheme not in {"http", "https"}:
+        return
+    if parsed.hostname not in {"localhost", "127.0.0.1"}:
+        return
+    if parsed.path not in {"", "/", "/event"}:
+        return
+    if (parsed.port or 80) == int(event_port):
+        return
+
+    new_netloc = f"{parsed.hostname}:{event_port}"
+    updated = parsed._replace(netloc=new_netloc, path="/event")
+    new_url = urlunparse(updated)
+    server_cfg["url"] = new_url
+    logger.info("[EventDashboard] server.url auto-synced to %s", new_url)
+
+
+def start_dashboards_if_enabled(config: Dict[str, Any], logger: logging.Logger):
+    server_cfg = config.get("server", {}) or {}
+    procs = []
+    started_scripts = set()
+    event_port = parse_int(server_cfg.get("event_dashboard_port"), 8100)
+    contextllm_port = parse_int(server_cfg.get("contextllm_dashboard_port"), 5100)
+
+    event_dashboard_enabled = (
+        parse_bool(server_cfg.get("auto_start_dashboard", False), False)
+        or parse_bool(server_cfg.get("auto_start_event_dashboard", False), False)
+    )
+    if event_dashboard_enabled:
+        sync_server_url_with_event_port(config, event_port, logger)
+        script_path = _resolve_script_path(
+            str(server_cfg.get("dashboard_script", "integrated_system/modules/dashboard_server.py"))
+        )
+        key = str(script_path)
+        if key not in started_scripts:
+            if is_port_in_use(event_port):
+                logger.warning(
+                    "[EventDashboard] port %s already in use. Skip auto-start.",
+                    event_port,
+                )
+            else:
+                env = os.environ.copy()
+                env["EVENT_DASHBOARD_PORT"] = str(event_port)
+                proc = _start_dashboard_process(script_path, "EventDashboard", logger, env=env)
+                if proc is not None:
+                    procs.append(("EventDashboard", proc))
+                    started_scripts.add(key)
+
+    contextllm_dashboard_enabled = parse_bool(server_cfg.get("auto_start_contextllm_dashboard", False), False)
+    if contextllm_dashboard_enabled:
+        script_path = _resolve_script_path(
+            str(server_cfg.get("contextllm_dashboard_script", "contextllm/src/web/app.py"))
+        )
+        key = str(script_path)
+        if key in started_scripts:
+            logger.info("[ContextLLMDashboard] duplicate script skipped: %s", script_path)
+        else:
+            if is_port_in_use(contextllm_port):
+                logger.warning(
+                    "[ContextLLMDashboard] port %s already in use. Skip auto-start.",
+                    contextllm_port,
+                )
+            else:
+                env = os.environ.copy()
+                env["CONTEXTLLM_DASHBOARD_PORT"] = str(contextllm_port)
+                proc = _start_dashboard_process(script_path, "ContextLLMDashboard", logger, env=env)
+                if proc is not None:
+                    procs.append(("ContextLLMDashboard", proc))
+                    started_scripts.add(key)
+
+    return procs
+
+
+def stop_dashboards(procs, logger: logging.Logger) -> None:
+    for label, proc in reversed(procs or []):
+        if proc is None or proc.poll() is not None:
+            continue
+        try:
+            proc.terminate()
+            proc.wait(timeout=3)
+            logger.info("[%s] auto-start process stopped.", label)
+        except Exception:
+            try:
+                proc.kill()
+                logger.info("[%s] auto-start process killed.", label)
+            except Exception:
+                pass
 
 
 class MicContextFusionApp:
@@ -662,6 +818,8 @@ def main() -> int:
     args = parse_args()
     config = load_config(args.config)
     setup_logging(config)
+    logger = logging.getLogger("MicContextFusion")
+    dashboard_procs = start_dashboards_if_enabled(config, logger)
 
     # Load API keys and camera envs, if present.
     root_env = PROJECT_ROOT / ".env"
@@ -675,8 +833,9 @@ def main() -> int:
     app = MicContextFusionApp(config)
 
     def _shutdown_handler(signum, _frame):
-        logging.getLogger("MicContextFusion").info("Signal received: %s", signum)
+        logger.info("Signal received: %s", signum)
         app.stop()
+        stop_dashboards(dashboard_procs, logger)
 
     signal.signal(signal.SIGINT, _shutdown_handler)
     signal.signal(signal.SIGTERM, _shutdown_handler)
@@ -686,6 +845,7 @@ def main() -> int:
         app.run_forever()
     finally:
         app.stop()
+        stop_dashboards(dashboard_procs, logger)
     return 0
 
 

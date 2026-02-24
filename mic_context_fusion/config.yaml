@@ -53,8 +53,15 @@ context_llm:
 
 server:
   enabled: true
-  url: "http://localhost:8000/event"
+  url: "http://localhost:8100/event"
   timeout: 2.0
+  event_dashboard_port: 8100
+  contextllm_dashboard_port: 5100
+  auto_start_dashboard: false            # 이벤트 모니터링형 대시보드 자동 시작(기존 키)
+  auto_start_event_dashboard: false      # 이벤트 모니터링형 대시보드 자동 시작(신규 별칭)
+  dashboard_script: "integrated_system/modules/dashboard_server.py"
+  auto_start_contextllm_dashboard: true # contextllm 웹 대시보드 자동 시작
+  contextllm_dashboard_script: "contextllm/src/web/app.py"
 
 openai:
   # Optional: API key can be set here for this fusion runner.

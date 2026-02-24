@@ -57,10 +57,10 @@ class DashboardServer:
         self._initialized = True
         self.server_thread = None
         self.running = False
-        self.port = 5000
+        self.port = 5100
         self.host = '127.0.0.1'
     
-    def start(self, port: int = 5000, host: str = None):
+    def start(self, port: int = 5100, host: str = None):
         """백그라운드에서 서버 시작 (localhost에만 바인드)"""
         if self.running:
             print(f"   ⚠️ 웹 대시보드가 이미 실행 중입니다: http://{self.host}:{self.port}")
@@ -228,7 +228,7 @@ def handle_connect():
 
 
 # 외부에서 사용할 함수
-def start_dashboard(port: int = 5000):
+def start_dashboard(port: int = 5100):
     """대시보드 시작"""
     dashboard.start(port=port)
 
@@ -260,7 +260,8 @@ def stop_dashboard():
 if __name__ == '__main__':
     # 직접 실행 시 테스트
     print("🚀 웹 대시보드 테스트 모드")
-    dashboard.start(port=5000)
+    run_port = int(os.getenv("CONTEXTLLM_DASHBOARD_PORT", "5100"))
+    dashboard.start(port=run_port)
     
     try:
         while True:

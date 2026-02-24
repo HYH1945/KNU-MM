@@ -200,7 +200,7 @@ def build_settings(raw: Dict[str, Any]) -> ContextLLMSettings:
         ),
         display=DisplaySettings(
             web_enabled=_to_bool(display_raw.get("web_enabled"), False),
-            web_port=_to_int(display_raw.get("web_port"), 5000),
+            web_port=_to_int(display_raw.get("web_port"), 5100),
             opencv_live=_to_bool(display_raw.get("opencv_live"), True),
             keep_open_after_run=_to_bool(display_raw.get("keep_open_after_run"), False),
         ),
