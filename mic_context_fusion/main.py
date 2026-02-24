@@ -205,6 +205,12 @@ class MicContextFusionApp:
             contextllm_config,
             overrides=llm_overrides or None,
         )
+        if not self._is_llm_available():
+            self.logger.warning(
+                "ContextLLM analyzer is unavailable. "
+                "Set OPENAI_API_KEY (or mic_context_fusion/config.yaml: openai.api_key) "
+                "to enable multimodal analysis."
+            )
 
         self.non_speech_enabled = parse_bool(non_speech_cfg.get("enabled", True), True)
         self.non_speech_min_duration = parse_float(non_speech_cfg.get("min_audio_duration", 0.2), 0.2)
@@ -232,6 +238,13 @@ class MicContextFusionApp:
         self.event_bus.subscribe("stt.text_recognized", self._on_stt_text)
         self.event_bus.subscribe("stt.non_speech_audio", self._on_non_speech_audio)
         self.event_bus.subscribe("llm.emergency", self._on_emergency)
+
+    def _is_llm_available(self) -> bool:
+        if self.llm_service is None:
+            return False
+        system = getattr(self.llm_service, "system", None)
+        analyzer = getattr(system, "multimodal_analyzer", None) if system is not None else None
+        return analyzer is not None
 
     def _init_sound_event_detector(self, non_speech_cfg: Dict[str, Any]) -> None:
         if not self.non_speech_enabled:
@@ -279,7 +292,7 @@ class MicContextFusionApp:
         else:
             self.logger.warning("STT module is not ready.")
 
-        llm_ready = self.llm_service is not None
+        llm_ready = self._is_llm_available()
 
         self.logger.info(
             "Module status - mic: %s, stt: %s, llm: %s",
@@ -343,6 +356,10 @@ class MicContextFusionApp:
         if not text:
             return
 
+        if self._analysis_lock.locked():
+            self.logger.info("Analysis in progress, ignored STT text=%s", text)
+            return
+
         # Keep event callbacks non-blocking.
         threading.Thread(
             target=self._run_multimodal_analysis,
@@ -354,6 +371,9 @@ class MicContextFusionApp:
 
     def _on_non_speech_audio(self, event) -> None:
         if not self.non_speech_enabled or self.sound_event_detector is None:
+            return
+
+        if self._analysis_lock.locked():
             return
 
         audio = event.data.get("audio")
@@ -415,6 +435,13 @@ class MicContextFusionApp:
         trigger_source: str = "speech",
         doa_hint: Optional[float] = None,
     ) -> None:
+        if not self._running:
+            return
+
+        if not self._is_llm_available():
+            self.logger.warning("ContextLLM analyzer unavailable; skip trigger=%s", trigger_source)
+            return
+
         if not self._analysis_lock.acquire(blocking=False):
             self.logger.info("Analysis in progress, skipped trigger=%s text=%s", trigger_source, text)
             return
