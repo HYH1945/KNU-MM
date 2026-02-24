@@ -5,7 +5,7 @@ camera:
   source: 0
 
 ptz:
-  control_mode: "onvif"      # onvif | hikvision_http | both
+  control_mode: "both"      # onvif | hikvision_http | both
   ip: ""
   port: 80
   user: ""
@@ -57,11 +57,18 @@ server:
   timeout: 2.0
   event_dashboard_port: 8100
   contextllm_dashboard_port: 5100
-  auto_start_dashboard: false            # 이벤트 모니터링형 대시보드 자동 시작(기존 키)
-  auto_start_event_dashboard: false      # 이벤트 모니터링형 대시보드 자동 시작(신규 별칭)
+  auto_start_dashboard: true             # 이벤트 모니터링형 대시보드 자동 시작(기존 키)
+  auto_start_event_dashboard: true       # 이벤트 모니터링형 대시보드 자동 시작(신규 별칭)
   dashboard_script: "integrated_system/modules/dashboard_server.py"
   auto_start_contextllm_dashboard: true # contextllm 웹 대시보드 자동 시작
   contextllm_dashboard_script: "contextllm/src/web/app.py"
+  push_contextllm_dashboard: true        # 분석 결과를 contextllm 대시보드로 HTTP 푸시
+  contextllm_dashboard_url: ""           # 비우면 http://127.0.0.1:{contextllm_dashboard_port}/api/push_result 사용
+  contextllm_dashboard_timeout: 1.2
+
+display:
+  show_opencv: true
+  window_name: "Mic Context Fusion"
 
 openai:
   # Optional: API key can be set here for this fusion runner.

@@ -126,7 +126,7 @@ brew install libusb
 OPENAI_API_KEY=sk-...
 
 # 카메라 설정 (선택, config.yaml로도 설정 가능)
-RTSP_URL=rtsp://admin:password@ip
+RTSP_URL=rtsp://admin:password@ip/Streaming/Channels/101
 CAMERA_IP=ip
 CAMERA_USER=admin
 CAMERA_PASSWORD=password

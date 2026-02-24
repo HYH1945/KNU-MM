@@ -11,7 +11,7 @@ import time
 import cv2
 from datetime import datetime
 from pathlib import Path
-from flask import Flask, render_template, jsonify, Response
+from flask import Flask, render_template, jsonify, Response, request
 from flask_socketio import SocketIO, emit
 
 # 프로젝트 루트 경로 추가
@@ -193,6 +193,19 @@ def clear_results():
 def video_status():
     """비디오 스트리밍 상태 확인"""
     return jsonify({'enabled': video_streaming_enabled})
+
+
+@app.route('/api/push_result', methods=['POST'])
+def api_push_result():
+    """외부 프로세스가 분석 결과를 대시보드로 푸시"""
+    try:
+        payload = request.get_json(silent=True) or {}
+        if not isinstance(payload, dict):
+            return jsonify({'status': 'error', 'message': 'invalid_payload'}), 400
+        dashboard.push_result(payload)
+        return jsonify({'status': 'ok'})
+    except Exception as exc:
+        return jsonify({'status': 'error', 'message': str(exc)}), 500
 
 
 def generate_frames():

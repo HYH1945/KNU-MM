@@ -33,6 +33,7 @@ import sys
 import os
 import time
 import threading
+import queue
 import logging
 from pathlib import Path
 from typing import Dict, Any, Optional, List
@@ -42,9 +43,9 @@ try:
 except ImportError:
     requests = None
 
-from integrated_system.core.base_module import BaseModule
-from integrated_system.core.event_bus import EventBus, Event
-from integrated_system.core.module_loader import (
+from integrated_system_process.core.base_module import BaseModule
+from integrated_system_process.core.event_bus import EventBus, Event
+from integrated_system_process.core.module_loader import (
     CONTEXTLLM_DIR, CONTEXTLLM_SRC, CONTEXTLLM_CORE,
     ensure_path, import_from_file,
 )
@@ -140,6 +141,12 @@ class ContextLLMModule(BaseModule):
         # 최신 분석 결과 (OpenCV 오버레이용)
         self._display_result: Dict = {}
         self._display_lock = threading.Lock()
+
+        # 비동기 LLM 처리를 위한 워커 스레드 및 큐 (메인 루프 프리징 방지)
+        self._analysis_queue = queue.Queue(maxsize=5) # 큐 크기 제한으로 메모리/요청 폭주 방지
+        self._worker_thread = threading.Thread(target=self._analysis_worker, daemon=True)
+        self._worker_thread.start()
+
 
     @property
     def name(self) -> str:
@@ -435,7 +442,15 @@ class ContextLLMModule(BaseModule):
                 "display_result": self.get_display_result(),
             }
 
-        # 소비 처리
+        if self._analysis_queue.full():
+            logger.warning("[ContextLLM] 분석 큐가 가득 찼습니다. 이번 프레임 분석은 건너뜁니다.")
+            return {
+                "analyzed": False,
+                "reason": "queue_full",
+                "display_result": self.get_display_result(),
+            }
+
+        # 소비 후보 추출 (큐 적재 실패 시 복구 가능하도록 임시 보관)
         speech_text = None
         if has_speech:
             with self._text_lock:
@@ -463,137 +478,198 @@ class ContextLLMModule(BaseModule):
         )
 
         try:
-            self._last_analysis_time = now
-
             # mic_context_fusion 방식: DOA가 최신이면 PTZ를 먼저 정렬
             doa = self._resolve_recent_doa(now)
-            if doa is not None and self.ptz is not None:
-                try:
-                    from integrated_system.modules.ptz_controller import PTZPriority
 
-                    self.ptz.request_move(
-                        pan=float(doa),
-                        tilt=-15,
-                        priority=PTZPriority.YOLO_TRACKING,
-                        owner=self.name,
-                        move_type="absolute",
-                    )
-                    if self.ptz_settle_seconds > 0:
-                        time.sleep(self.ptz_settle_seconds)
-                except Exception as e:
-                    logger.debug("[ContextLLM] PTZ pre-align failed: %s", e)
+            # 비동기 큐에 작업 넣기
+            frame_snapshot = frame
+            try:
+                if hasattr(frame, "copy"):
+                    frame_snapshot = frame.copy()
+            except Exception:
+                frame_snapshot = frame
 
-            # PTZ 정렬 후 최신 프레임 재캡처 (가능할 때)
-            fresh_frame = self._capture_frame_with_retry(stream, max_retry=10, retry_interval=0.1)
-            if fresh_frame is not None:
-                frame = fresh_frame
+            task = {
+                "frame": frame_snapshot, # 프레임 복사본 사용 (메인 스레드에서 변경될 수 있음)
+                "stream": stream,
+                "speech_text": speech_text,
+                "has_person": has_person,
+                "yolo_result": yolo_result,
+                "sound_event": sound_event,
+                "trigger_source": trigger_source,
+                "doa": doa,
+                "timestamp": now
+            }
+            
+            self._analysis_queue.put(task, block=False)
+            self._last_analysis_time = now
+            
+            # 처리 중 상태 바로 반환 (동기 블로킹 해제)
+            with self._display_lock:
+                self._display_result["analyzed"] = True
+                self._display_result["priority"] = self._display_result.get("priority", "PROCESSING")
+                self._display_result["situation_type"] = "Thinking..."
+                self._display_result["urgency"] = "Analyzing Context"
+            
+            logger.info(f"[ContextLLM] 분석 작업 큐에 추가됨 (현재 대기열: {self._analysis_queue.qsize()})")
 
-            doa_object_mapping = self._compute_doa_object_mapping(
-                doa=doa,
-                frame=frame,
-                yolo_result=yolo_result,
-            )
+            return {
+                "analyzed": True,
+                "reason": "queued",
+                "display_result": self.get_display_result(),
+            }
 
-            # ★ 핵심: MultimodalAnalyzer로 직접 영상+텍스트 통합 분석 ★
-            result = self._analyze_multimodal(
-                frame,
-                speech_text,
-                has_person,
-                yolo_result=yolo_result,
-                sound_event=sound_event,
-                doa_object_mapping=doa_object_mapping,
-            )
-
-            if result and result.get("success"):
-                self._last_result = result
-                analysis = result.get("multimodal_analysis", {})
-                priority = analysis.get("priority", "LOW")
-                is_emergency = analysis.get("is_emergency", False)
-                situation = analysis.get("situation_type", analysis.get("situation", "N/A"))
-                urgency = analysis.get("urgency", "N/A")
-
-                # 디스플레이용 결과 갱신
-                display = {
-                    "analyzed": True,
-                    "priority": priority,
-                    "is_emergency": is_emergency,
-                    "situation": situation,
-                    "situation_type": situation,
-                    "urgency": urgency,
-                    "speech_text": speech_text,
-                    "has_person": has_person,
-                    "yolo_count": yolo_result.get("count", 0),
-                    "yolo_result": yolo_result,
-                    "doa_sector": doa,
-                    "doa_object_mapping": doa_object_mapping,
-                    "trigger_source": trigger_source,
-                    "sound_event": sound_event,
-                    "timestamp": now,
-                    "summary": analysis.get("summary", ""),
-                }
-                with self._display_lock:
-                    self._display_result = display
-
-                self._push_contextllm_dashboard(
-                    speech_text=speech_text,
-                    analysis=analysis,
-                    priority=priority,
-                    urgency=urgency,
-                    is_emergency=is_emergency,
-                    trigger_source=trigger_source,
-                    sound_event=sound_event,
-                )
-
-                # 이벤트 발행
-                self.emit("llm.analysis_complete", {
-                    "result": analysis,
-                    "priority": priority,
-                    "is_emergency": is_emergency,
-                    "speech_text": speech_text,
-                    "doa_sector": doa,
-                    "doa_object_mapping": doa_object_mapping,
-                    "yolo_result": yolo_result,
-                    "trigger_source": trigger_source,
-                    "sound_event": sound_event,
-                })
-
-                logger.info(
-                    "[ContextLLM] 분석 완료: trigger=%s, priority=%s, urgency=%s, situation=%s, yolo_count=%s",
-                    trigger_source,
-                    priority,
-                    urgency,
-                    situation,
-                    yolo_result.get("count", 0),
-                )
-
-                if is_emergency:
-                    self.emit("llm.emergency", {
-                        "result": analysis,
-                        "urgency": urgency,
-                        "situation": situation,
-                    }, priority=2)
-
-                return {
-                    "analyzed": True,
-                    "priority": priority,
-                    "is_emergency": is_emergency,
-                    "situation_type": situation,
-                    "urgency": urgency,
-                    "speech_text": speech_text,
-                    "doa_sector": doa,
-                    "doa_object_mapping": doa_object_mapping,
-                    "yolo_result": yolo_result,
-                    "trigger_source": trigger_source,
-                    "sound_event": sound_event,
-                    "analysis": analysis,
-                    "display_result": display,
-                }
-
-            return {"analyzed": False, "reason": "analysis_failed"}
-
+        except queue.Full:
+            # 큐 포화 경쟁 상황에서 소비한 이벤트를 최대한 복구
+            if speech_text:
+                with self._text_lock:
+                    if not self._pending_text:
+                        self._pending_text = speech_text
+                        self._pending_text_time = now
+            if sound_event:
+                with self._sound_lock:
+                    if self._pending_sound_event is None:
+                        self._pending_sound_event = sound_event
+                        self._pending_sound_event_time = now
+            logger.warning("[ContextLLM] 분석 큐가 가득 차서 요청을 거절했습니다.")
+            return {"analyzed": False, "reason": "queue_full"}
         except Exception as e:
-            logger.error(f"[ContextLLM] 분석 오류: {e}")
+            logger.error(f"[ContextLLM] 분석 오류 (큐 삽입 실패): {e}")
             return {"analyzed": False, "error": str(e)}
+
+    def _analysis_worker(self):
+        """백그라운드에서 LLM 분석을 수행하는 워커 스레드"""
+        logger.info("[ContextLLM] 비동기 LLM 분석 워커 스레드 시작")
+        while True:
+            try:
+                task = self._analysis_queue.get()
+                if task is None: # 종료 시그널
+                    break
+                    
+                frame = task["frame"]
+                stream = task["stream"]
+                speech_text = task["speech_text"]
+                has_person = task["has_person"]
+                yolo_result = task["yolo_result"]
+                sound_event = task["sound_event"]
+                trigger_source = task["trigger_source"]
+                doa = task["doa"]
+                now = task["timestamp"]
+                
+                # PTZ 정렬 및 프레임 캡처를 백그라운드 스레드에서 수행하여 메인 루프 블로킹을 막음
+                if doa is not None and self.ptz is not None:
+                    try:
+                        from integrated_system_process.modules.ptz_controller import PTZPriority
+
+                        self.ptz.request_move(
+                            pan=float(doa),
+                            tilt=-15,
+                            priority=PTZPriority.YOLO_TRACKING,
+                            owner=self.name,
+                            move_type="absolute",
+                        )
+                        if self.ptz_settle_seconds > 0:
+                            time.sleep(self.ptz_settle_seconds)
+                    except Exception as e:
+                        logger.debug("[ContextLLM] PTZ pre-align failed: %s", e)
+
+                # PTZ 정렬 후 최신 프레임 재캡처 (가능할 때)
+                fresh_frame = self._capture_frame_with_retry(stream, max_retry=10, retry_interval=0.1)
+                if fresh_frame is not None:
+                    frame = fresh_frame
+
+                doa_object_mapping = self._compute_doa_object_mapping(
+                    doa=doa,
+                    frame=frame,
+                    yolo_result=yolo_result,
+                )
+
+                # ★ 핵심: MultimodalAnalyzer로 직접 영상+텍스트 통합 분석 (동기 호출이지만 스레드 내부라 메인 스레드 안전) ★
+                logger.info(f"[ContextLLM] 백그라운드 멀티모달 분석 시작 (trigger: {trigger_source})")
+                
+                result = self._analyze_multimodal(
+                    frame,
+                    speech_text,
+                    has_person,
+                    yolo_result=yolo_result,
+                    sound_event=sound_event,
+                    doa_object_mapping=doa_object_mapping,
+                )
+
+                if result and result.get("success"):
+                    self._last_result = result
+                    analysis = result.get("multimodal_analysis", {})
+                    priority = analysis.get("priority", "LOW")
+                    is_emergency = analysis.get("is_emergency", False)
+                    situation = analysis.get("situation_type", analysis.get("situation", "N/A"))
+                    urgency = analysis.get("urgency", "N/A")
+
+                    # 디스플레이용 결과 갱신
+                    display = {
+                        "analyzed": True,
+                        "priority": priority,
+                        "is_emergency": is_emergency,
+                        "situation": situation,
+                        "situation_type": situation,
+                        "urgency": urgency,
+                        "speech_text": speech_text,
+                        "has_person": has_person,
+                        "yolo_count": yolo_result.get("count", 0),
+                        "yolo_result": yolo_result,
+                        "doa_sector": doa,
+                        "doa_object_mapping": doa_object_mapping,
+                        "trigger_source": trigger_source,
+                        "sound_event": sound_event,
+                        "timestamp": time.time(),
+                        "summary": analysis.get("summary", ""),
+                    }
+                    with self._display_lock:
+                        self._display_result = display
+
+                    self._push_contextllm_dashboard(
+                        speech_text=speech_text,
+                        analysis=analysis,
+                        priority=priority,
+                        urgency=urgency,
+                        is_emergency=is_emergency,
+                        trigger_source=trigger_source,
+                        sound_event=sound_event,
+                    )
+
+                    # 이벤트 발행
+                    self.emit("llm.analysis_complete", {
+                        "result": analysis,
+                        "priority": priority,
+                        "is_emergency": is_emergency,
+                        "speech_text": speech_text,
+                        "doa_sector": doa,
+                        "doa_object_mapping": doa_object_mapping,
+                        "yolo_result": yolo_result,
+                        "trigger_source": trigger_source,
+                        "sound_event": sound_event,
+                    })
+
+                    logger.info(
+                        "[ContextLLM] 분석 완료: trigger=%s, priority=%s, urgency=%s, situation=%s",
+                        trigger_source,
+                        priority,
+                        urgency,
+                        situation,
+                    )
+
+                    if is_emergency:
+                        self.emit("llm.emergency", {
+                            "result": analysis,
+                            "urgency": urgency,
+                            "situation": situation,
+                        }, priority=2)
+                else:
+                    logger.warning("[ContextLLM] API 분석 결과가 올바르지 않거나 실패했습니다.")
+
+            except Exception as e:
+                logger.error(f"[ContextLLM] 백그라운드 워커 실행 오류: {e}")
+            finally:
+                self._analysis_queue.task_done()
 
     def _push_contextllm_dashboard(
         self,
@@ -924,6 +1000,23 @@ class ContextLLMModule(BaseModule):
         return result
 
     def shutdown(self) -> None:
+        if hasattr(self, '_analysis_queue'):
+            # 큐가 가득 찬 상태에서도 종료가 블로킹되지 않도록 처리
+            try:
+                self._analysis_queue.put_nowait(None)  # 워커 스레드 종료 시그널
+            except queue.Full:
+                try:
+                    self._analysis_queue.get_nowait()
+                    self._analysis_queue.task_done()
+                except Exception:
+                    pass
+                try:
+                    self._analysis_queue.put_nowait(None)
+                except Exception:
+                    pass
+            if hasattr(self, '_worker_thread') and self._worker_thread.is_alive():
+                self._worker_thread.join(timeout=2.0)
+                
         self._system = None
         self._multimodal_analyzer = None
         logger.info("[ContextLLM] 종료")

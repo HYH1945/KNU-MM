@@ -24,6 +24,23 @@ from typing import Any, Dict, Optional, Union
 from urllib.parse import urlparse, urlunparse
 
 try:
+    import cv2
+    CV2_AVAILABLE = True
+except ImportError:
+    cv2 = None
+    CV2_AVAILABLE = False
+
+try:
+    import numpy as np
+except ImportError:
+    np = None
+
+try:
+    import requests
+except ImportError:
+    requests = None
+
+try:
     import yaml
 except ImportError:
     yaml = None
@@ -305,6 +322,7 @@ class MicContextFusionApp:
         llm_cfg = config.get("context_llm", {})
         non_speech_cfg = config.get("non_speech", {}) or {}
         server_cfg = config.get("server", {}) or {}
+        display_cfg = config.get("display", {}) or {}
 
         source = parse_camera_source(camera_cfg.get("source", 0))
         self.stream = SharedStreamManager(source).start()
@@ -346,6 +364,22 @@ class MicContextFusionApp:
                 timeout=parse_float(server_cfg.get("timeout", 2.0), 2.0),
                 enabled=True,
             )
+        self.contextllm_dashboard_push_enabled = parse_bool(
+            server_cfg.get("push_contextllm_dashboard", True),
+            True,
+        )
+        contextllm_dashboard_url = str(server_cfg.get("contextllm_dashboard_url", "") or "").strip()
+        contextllm_dashboard_port = parse_int(server_cfg.get("contextllm_dashboard_port"), 5100)
+        self.contextllm_dashboard_url = (
+            contextllm_dashboard_url
+            if contextllm_dashboard_url
+            else f"http://127.0.0.1:{contextllm_dashboard_port}/api/push_result"
+        )
+        self.contextllm_dashboard_timeout = parse_float(
+            server_cfg.get("contextllm_dashboard_timeout", 1.2),
+            1.2,
+        )
+        self._dashboard_push_warned = False
 
         # ContextLLM app/service 계층을 직접 사용해 결합 (config-first 구조 이식).
         contextllm_src = PROJECT_ROOT / "contextllm" / "src"
@@ -393,8 +427,14 @@ class MicContextFusionApp:
         self.ptz_tilt = ptz_cfg.get("tilt_on_doa", -15)
         self.ptz_settle_seconds = float(ptz_cfg.get("settle_seconds", 1.2))
         self.max_doa_age_seconds = float(ptz_cfg.get("max_doa_age_seconds", 5.0))
+        self.show_opencv = parse_bool(display_cfg.get("show_opencv", True), True)
+        self.window_name = str(display_cfg.get("window_name", "Mic Context Fusion"))
+        if self.show_opencv and not CV2_AVAILABLE:
+            self.logger.warning("OpenCV display requested but cv2 is not installed. Disable display.")
+            self.show_opencv = False
 
         self._running = False
+        self._stopped = False
         self._analysis_lock = threading.Lock()
         self._last_doa_sector: Optional[float] = None
         self._last_doa_time: float = 0.0
@@ -479,12 +519,24 @@ class MicContextFusionApp:
         self._running = True
         self.logger.info("Fusion workflow started.")
         self.logger.info(
+            "Display status - show_opencv=%s cv2_available=%s window=%s",
+            self.show_opencv,
+            CV2_AVAILABLE,
+            self.window_name,
+        )
+        self.logger.info(
+            "ContextLLM dashboard push - enabled=%s url=%s",
+            self.contextllm_dashboard_push_enabled,
+            self.contextllm_dashboard_url,
+        )
+        self.logger.info(
             "Flow: mic.doa_detected -> PTZ move -> (stt.text_recognized | stt.non_speech_audio) -> frame capture -> ContextLLM"
         )
 
     def stop(self) -> None:
-        if not self._running:
+        if self._stopped:
             return
+        self._stopped = True
         self._running = False
         self.logger.info("Stopping fusion workflow...")
 
@@ -499,12 +551,68 @@ class MicContextFusionApp:
                 self.ptz.shutdown()
             except Exception:
                 pass
+            if self.show_opencv and CV2_AVAILABLE:
+                try:
+                    cv2.destroyWindow(self.window_name)
+                except Exception:
+                    pass
 
         self.logger.info("Fusion workflow stopped.")
 
     def run_forever(self) -> None:
+        if self.show_opencv:
+            self._run_opencv_loop()
+            return
         while self._running:
             time.sleep(0.2)
+
+    def _run_opencv_loop(self) -> None:
+        if not self.show_opencv or not CV2_AVAILABLE:
+            return
+
+        try:
+            cv2.namedWindow(self.window_name, cv2.WINDOW_NORMAL)
+            self.logger.info("OpenCV display started: window=%s", self.window_name)
+        except Exception as exc:
+            self.logger.warning("OpenCV window create failed: %s", exc)
+            while self._running:
+                time.sleep(0.2)
+            return
+
+        while self._running:
+            try:
+                frame = self.stream.get_frame()
+                if frame is not None:
+                    cv2.imshow(self.window_name, frame)
+                else:
+                    if np is not None:
+                        # Ensure window is visible even before the first camera frame arrives.
+                        placeholder = np.zeros((360, 640, 3), dtype=np.uint8)
+                        cv2.putText(
+                            placeholder,
+                            "Waiting for video frame...",
+                            (28, 180),
+                            cv2.FONT_HERSHEY_SIMPLEX,
+                            0.8,
+                            (0, 255, 255),
+                            2,
+                            cv2.LINE_AA,
+                        )
+                        cv2.imshow(self.window_name, placeholder)
+                    time.sleep(0.03)
+            except Exception as exc:
+                self.logger.error(
+                    "OpenCV imshow failed (%s). "
+                    "Check GUI-capable OpenCV install (not opencv-python-headless).",
+                    exc,
+                )
+                self._running = False
+                break
+
+            key = cv2.waitKey(1) & 0xFF
+            if key in (ord("q"), 27):
+                self._running = False
+                break
 
     def _on_doa_detected(self, event) -> None:
         sector = event.data.get("sector_angle")
@@ -674,6 +782,15 @@ class MicContextFusionApp:
                     urgency=urgency,
                     is_emergency=bool(service_result.get("is_emergency", False)),
                 )
+                self._push_contextllm_dashboard(
+                    text=text,
+                    analysis=analysis,
+                    priority=priority,
+                    urgency=urgency,
+                    is_emergency=bool(service_result.get("is_emergency", False)),
+                    sound_event=sound_event,
+                    trigger_source=trigger_source,
+                )
                 self.event_bus.publish_simple(
                     "fusion.analysis_complete",
                     {
@@ -720,6 +837,70 @@ class MicContextFusionApp:
             self.logger.error("Fusion analysis error: %s", exc)
         finally:
             self._analysis_lock.release()
+
+    def _push_contextllm_dashboard(
+        self,
+        text: str,
+        analysis: Dict[str, Any],
+        priority: str,
+        urgency: str,
+        is_emergency: bool,
+        sound_event: Optional[Dict[str, Any]],
+        trigger_source: str,
+    ) -> None:
+        if not self.contextllm_dashboard_push_enabled:
+            return
+        if requests is None:
+            if not self._dashboard_push_warned:
+                self.logger.warning(
+                    "requests is not installed; contextllm dashboard push disabled."
+                )
+                self._dashboard_push_warned = True
+            return
+
+        analysis_payload = dict(analysis or {})
+        analysis_payload.setdefault("priority", priority)
+        analysis_payload.setdefault("urgency", urgency)
+        analysis_payload.setdefault("is_emergency", bool(is_emergency))
+
+        payload = {
+            "success": True,
+            "transcribed_text": text,
+            "trigger_source": trigger_source,
+            "sound_event": sound_event,
+            "multimodal_analysis": analysis_payload,
+            "voice_characteristics": {},
+        }
+
+        try:
+            resp = requests.post(
+                self.contextllm_dashboard_url,
+                json=payload,
+                timeout=self.contextllm_dashboard_timeout,
+            )
+            if resp.status_code >= 400:
+                if not self._dashboard_push_warned:
+                    self.logger.warning(
+                        "ContextLLM dashboard push failed: status=%s url=%s",
+                        resp.status_code,
+                        self.contextllm_dashboard_url,
+                    )
+                    self._dashboard_push_warned = True
+                else:
+                    self.logger.debug(
+                        "ContextLLM dashboard push failed: status=%s body=%s",
+                        resp.status_code,
+                        resp.text[:200],
+                    )
+            elif self._dashboard_push_warned:
+                self.logger.info("ContextLLM dashboard push recovered.")
+                self._dashboard_push_warned = False
+        except Exception as exc:
+            if not self._dashboard_push_warned:
+                self.logger.warning("ContextLLM dashboard push error: %s", exc)
+                self._dashboard_push_warned = True
+            else:
+                self.logger.debug("ContextLLM dashboard push error: %s", exc)
 
     def _build_additional_context(self, doa: Optional[float]) -> Optional[str]:
         contexts = []

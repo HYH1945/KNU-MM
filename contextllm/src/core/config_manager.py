@@ -53,8 +53,22 @@ PROJECT_ROOT = _find_project_root()
 CONFIG_DIR = PROJECT_ROOT / 'config'
 CONFIG_PATH = CONFIG_DIR / 'config.yaml'
 ENV_PATH = CONFIG_DIR / '.env'
+ROOT_ENV_PATH = PROJECT_ROOT.parent / '.env'
 ACTIVE_CONFIG_PATH = CONFIG_PATH
 ACTIVE_ENV_PATH = ENV_PATH
+
+
+def _load_env_sources() -> None:
+    """
+    환경변수 로드 순서:
+    1) 워크스페이스 루트 .env (KNU-MM/.env)
+    2) contextllm 설정 경로의 .env (contextllm/config/.env)
+    override=False 이므로 먼저 로드된 값이 우선된다.
+    """
+    if ROOT_ENV_PATH.exists():
+        load_dotenv(ROOT_ENV_PATH, override=False)
+    if ACTIVE_ENV_PATH.exists():
+        load_dotenv(ACTIVE_ENV_PATH, override=False)
 
 
 def load_config(config_path: Optional[Path] = None) -> dict:
@@ -118,8 +132,8 @@ def set_config_path(
     ACTIVE_CONFIG_PATH = Path(config_path).resolve()
     ACTIVE_ENV_PATH = ACTIVE_CONFIG_PATH.parent / '.env'
 
-    if load_env_file and ACTIVE_ENV_PATH.exists():
-        load_dotenv(ACTIVE_ENV_PATH, override=False)
+    if load_env_file:
+        _load_env_sources()
 
     if auto_reload:
         return reload_config(ACTIVE_CONFIG_PATH)
@@ -142,8 +156,8 @@ def set_runtime_config(
 
     if config_path is not None:
         set_config_path(config_path, auto_reload=False, load_env_file=load_env_file)
-    elif load_env_file and ACTIVE_ENV_PATH.exists():
-        load_dotenv(ACTIVE_ENV_PATH, override=False)
+    elif load_env_file:
+        _load_env_sources()
 
     if runtime_config is None:
         config = load_config(ACTIVE_CONFIG_PATH)
@@ -170,8 +184,7 @@ def get_api_key(service: str = 'openai') -> Optional[str]:
         API 키 문자열 또는 None
     """
     # .env 파일 로드
-    if ACTIVE_ENV_PATH.exists():
-        load_dotenv(ACTIVE_ENV_PATH, override=False)
+    _load_env_sources()
     
     # 환경변수 이름 매핑
     env_var_names = {

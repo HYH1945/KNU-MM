@@ -48,15 +48,15 @@ from dotenv import load_dotenv
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
-from integrated_system.core.event_bus import EventBus, Event
-from integrated_system.core.orchestrator import Orchestrator
-from integrated_system.modules.stream_manager import SharedStreamManager
-from integrated_system.modules.ptz_controller import UnifiedPTZController
-from integrated_system.modules.yolo_detection import YOLODetectionModule
-from integrated_system.modules.mic_array import MicArrayModule
-from integrated_system.modules.stt_module import STTModule
-from integrated_system.modules.context_llm import ContextLLMModule
-from integrated_system.modules.server_reporter import ServerReporterModule
+from integrated_system_process.core.event_bus import EventBus, Event
+from integrated_system_process.core.orchestrator import Orchestrator
+from integrated_system_process.modules.stream_manager import SharedStreamManager
+from integrated_system_process.modules.ptz_controller import UnifiedPTZController
+from integrated_system_process.modules.yolo_detection import YOLODetectionModule
+from integrated_system_process.modules.mic_array import MicArrayModule
+from integrated_system_process.modules.stt_module import STTModule
+from integrated_system_process.modules.context_llm import ContextLLMModule
+from integrated_system_process.modules.server_reporter import ServerReporterModule
 
 
 def _get_env_str(*keys: str) -> str:
@@ -639,6 +639,10 @@ def run_main_loop(orch: Orchestrator, stream: SharedStreamManager, config: dict,
                     cv2.putText(display_frame, label, (sx, 25),
                                 cv2.FONT_HERSHEY_SIMPLEX, 0.45, color, 1)
                     # 상태 점
+                    if label == "LLM" and display_llm.get("analyzed") and display_llm.get("situation_type") == "Thinking...":
+                        # LLM이 처리 중이면 점 깜빡임 (노란색)
+                        if int(time.time() * 4) % 2 == 0:
+                            color = (0, 255, 255)
                     cv2.circle(display_frame, (sx + 15, 40), 5, color, -1)
 
                 # ── 3. DOA 방향 표시 (좌하단 미니 컴퍼스) ──
@@ -685,8 +689,14 @@ def run_main_loop(orch: Orchestrator, stream: SharedStreamManager, config: dict,
                     situation = display_llm.get("situation_type", "")
                     speech_text = display_llm.get("speech_text", "")
 
-                    # 긴급도에 따른 색상
-                    if is_emergency:
+                    # 상태별 색상 및 라벨 설정
+                    if priority == "PROCESSING" or situation == "Thinking...":
+                        llm_color = (0, 255, 255)  # 노랑 (처리 중)
+                        priority_icon = "[PROCESSING]"
+                        idx = int(time.time() * 3) % 4
+                        urgency = "Thinking" + "." * idx
+                        situation = "Waiting for LLM response..."
+                    elif is_emergency:
                         llm_color = (0, 0, 255)   # 빨강
                         priority_icon = "[EMERGENCY]"
                     elif priority in ("CRITICAL", "HIGH"):
