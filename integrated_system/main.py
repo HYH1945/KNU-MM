@@ -1,206 +1,170 @@
+#!/usr/bin/env python3
 """
-KNU-MM 통합 멀티모달 관제 시스템 - 메인 진입점
+Mic Array + ContextLLM fusion runner.
 
-모든 모듈(YOLO, MicArray, STT, ContextLLM, ServerReporter)을 하나의
-파이프라인으로 통합 실행합니다.
-
-데이터 흐름:
-    ┌─── 영상 ───┐     ┌─── 음성 ───┐
-    │ CCTV/웹캠  │     │ MicArray   │
-    └─────┬──────┘     └────┬───────┘
-          │                  │
-     YOLO 탐지          DOA 방향 감지
-          │              STT 텍스트 변환
-          │                  │
-          └───── ContextLLM ─┘
-                (통합 분석)
-                     │
-              OpenCV 통합 화면
-
-사용법:
-    cd integrated_system
-    python main.py                          # 기본 실행
-    python main.py --no-mic                 # 마이크 어레이 없이
-    python main.py --no-stt                 # 음성 인식 없이
-    python main.py --no-llm                 # LLM 분석 없이
-    python main.py --no-display             # 화면 표시 없이
-    python main.py --config custom.yaml     # 커스텀 설정
+Workflow:
+1) Mic array detects speech direction (DOA).
+2) PTZ moves to the detected direction.
+3) STT captures speech text OR emits non-speech audio candidate.
+4) After PTZ settle delay, current camera frame is captured.
+5) ContextLLM analyzes text + frame (+ non-speech context, if available).
 """
 
-import os
-import sys
-import cv2
-import time
-import math
-import signal
-import logging
 import argparse
-import numpy as np
+import logging
+import os
+import signal
+import sys
+import threading
+import time
 from pathlib import Path
+from typing import Any, Dict, Optional, Union
 
-import yaml
-from dotenv import load_dotenv
+try:
+    import yaml
+except ImportError:
+    yaml = None
 
-# 프로젝트 루트 경로 추가
+try:
+    from dotenv import load_dotenv
+except ImportError:
+    def load_dotenv(*_args, **_kwargs):
+        return False
+
+
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(PROJECT_ROOT))
-
-from integrated_system.core.event_bus import EventBus, Event
-from integrated_system.core.orchestrator import Orchestrator
-from integrated_system.modules.stream_manager import SharedStreamManager
-from integrated_system.modules.ptz_controller import UnifiedPTZController
-from integrated_system.modules.yolo_detection import YOLODetectionModule
-from integrated_system.modules.mic_array import MicArrayModule
-from integrated_system.modules.stt_module import STTModule
-from integrated_system.modules.context_llm import ContextLLMModule
-from integrated_system.modules.server_reporter import ServerReporterModule
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
 
 
-def load_config(config_path: str) -> dict:
-    """설정 파일 로드 (YAML + 환경변수 오버라이드)"""
-    config = {}
-    if os.path.exists(config_path):
-        with open(config_path, 'r', encoding='utf-8') as f:
-            config = yaml.safe_load(f) or {}
-
-    # .env 로드
-    env_path = PROJECT_ROOT / ".env"
-    if env_path.exists():
-        load_dotenv(env_path)
-
-    contextllm_env = PROJECT_ROOT / "contextllm" / "config" / ".env"
-    if contextllm_env.exists():
-        load_dotenv(contextllm_env)
-
-    # config.yaml 우선, 값이 비어있을 때만 환경변수 사용
-    cam = config.setdefault("camera", {})
-    if not cam.get("rtsp_url") and cam.get("rtsp_url") != 0:
-        cam["rtsp_url"] = os.getenv("RTSP_URL", "")
-    cam["ip"] = cam.get("ip") or os.getenv("CAMERA_IP", "")
-    cam["port"] = int(cam.get("port") or os.getenv("CAMERA_PORT", 80))
-    cam["user"] = cam.get("user") or os.getenv("CAMERA_USER", "")
-    cam["password"] = cam.get("password") or os.getenv("CAMERA_PASSWORD", "")
-
-    return config
+DEFAULT_CONFIG_PATH = Path(__file__).resolve().parent / "config.yaml"
 
 
-def setup_logging(config: dict) -> None:
-    """로깅 설정"""
-    log_cfg = config.get("logging", {})
-    level = getattr(logging, log_cfg.get("level", "INFO").upper(), logging.INFO)
+def load_config(config_path: Union[str, Path]) -> Dict[str, Any]:
+    if yaml is None:
+        raise RuntimeError("PyYAML is required. Install with: pip install pyyaml")
 
-    handlers = [logging.StreamHandler()]
-    log_file = log_cfg.get("file", "")
-    if log_file:
-        handlers.append(logging.FileHandler(log_file, encoding='utf-8'))
+    config_path = Path(config_path)
+    if config_path.exists():
+        with open(config_path, "r", encoding="utf-8") as f:
+            return yaml.safe_load(f) or {}
+    return {}
 
+
+def setup_logging(config: Dict[str, Any]) -> None:
+    runtime_cfg = config.get("runtime", {})
+    level_name = runtime_cfg.get("log_level", "INFO")
+    level = getattr(logging, str(level_name).upper(), logging.INFO)
     logging.basicConfig(
         level=level,
         format="%(asctime)s [%(name)-18s] %(levelname)-7s %(message)s",
         datefmt="%H:%M:%S",
-        handlers=handlers,
     )
 
 
-def build_system(config: dict, args) -> tuple:
+def apply_openai_api_key(config: Dict[str, Any], cli_key: Optional[str]) -> None:
     """
-    시스템 빌드 - 모든 모듈을 생성하고 오케스트레이터에 등록
-    
-    Returns:
-        (orchestrator, event_bus, stream_manager, ptz, mic_module, stt_module)
+    OPENAI_API_KEY 주입 우선순위:
+    1) CLI --openai-api-key
+    2) mic_context_fusion/config.yaml 의 openai.api_key
+    3) 기존 환경변수 / .env 값 유지
     """
-    # 1. 이벤트 버스 생성
-    event_bus = EventBus(max_workers=4, async_mode=True)
+    if cli_key:
+        os.environ["OPENAI_API_KEY"] = cli_key.strip()
+        return
 
-    # 2. 공유 리소스 생성
-    cam_cfg = config.get("camera", {})
-    
-    # 테스트 영상 우선 확인
-    test_video_path = cam_cfg.get("test_video", "")
-    if test_video_path:
-        # 상대경로면 프로젝트 루트 기준으로 변환
-        if not os.path.isabs(test_video_path):
-            test_video_path = str(PROJECT_ROOT / test_video_path)
-        if os.path.exists(test_video_path):
-            rtsp_url = test_video_path
-            logging.info(f"🎬 테스트 영상 모드: {test_video_path}")
-        else:
-            logging.warning(f"⚠️  테스트 영상 파일 없음: {test_video_path} → 웹캠으로 폴백")
-            rtsp_url = cam_cfg.get("rtsp_url", 0)
-    else:
-        rtsp_url = cam_cfg.get("rtsp_url", 0)
-    
-    # 숫자 문자열을 int로 변환 (0=웹캠, 1=두번째 카메라 등)
-    if isinstance(rtsp_url, str) and rtsp_url.isdigit():
-        rtsp_url = int(rtsp_url)
-    
-    # 테스트 모드: rtsp_url이 None이거나 -1이면 테스트 비디오 사용
-    if rtsp_url is None or rtsp_url == -1:
-        test_video = Path(__file__).parent / "test_video.mp4"
-        if test_video.exists():
-            rtsp_url = str(test_video)
-            logging.warning(f"⚠️  테스트 모드: {test_video.name} 사용")
-        else:
-            logging.warning("⚠️  테스트 모드: 더미 스트림 사용 (영상 없음)")
-            # 더미 URL - stream이 None 반환할 것
-            rtsp_url = "test://dummy"
-    
-    stream = SharedStreamManager(rtsp_url)
-    stream.start()
+    cfg_key = (config.get("openai", {}) or {}).get("api_key", "")
+    if isinstance(cfg_key, str) and cfg_key.strip():
+        os.environ["OPENAI_API_KEY"] = cfg_key.strip()
 
-    # PTZ 컨트롤러
-    ptz_cfg = config.get("ptz", {})
 
-    # ★ SpatialContext 생성 — 카메라 방위각/YOLO/DOA/STT 통합 추적 ★
-    from integrated_system.core.spatial_context import SpatialContext
-    fusion_cfg = config.get("fusion", {})
-    spatial_context = SpatialContext(
-        camera_fov=fusion_cfg.get("camera_fov", 60.0),
-        spatial_match_threshold=fusion_cfg.get("spatial_match_threshold", 30.0),
-        event_history_size=fusion_cfg.get("event_history_size", 50),
-        event_history_duration=fusion_cfg.get("event_history_duration", 60.0),
-    )
-    logging.info(f"🌐 SpatialContext 생성: FOV={fusion_cfg.get('camera_fov', 60.0)}°, 매칭 임계값={fusion_cfg.get('spatial_match_threshold', 30.0)}°")
+def parse_camera_source(value: Any) -> Union[int, str]:
+    if isinstance(value, int):
+        return value
+    if isinstance(value, str) and value.strip().isdigit():
+        return int(value.strip())
+    return value
 
-    ptz = UnifiedPTZController({
-        "camera_ip": cam_cfg.get("ip", ""),
-        "camera_port": cam_cfg.get("port", 80),
-        "camera_user": cam_cfg.get("user", ""),
-        "camera_password": cam_cfg.get("password", ""),
-        "control_mode": ptz_cfg.get("control_mode", "onvif"),
-    }, spatial_context=spatial_context)
-    ptz.initialize()
 
-    # 3. 오케스트레이터 생성
-    orch = Orchestrator(event_bus)
+def parse_bool(value: Any, default: bool = False) -> bool:
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return default
+    if isinstance(value, str):
+        lowered = value.strip().lower()
+        if lowered in {"1", "true", "yes", "on"}:
+            return True
+        if lowered in {"0", "false", "no", "off"}:
+            return False
+    return bool(value)
 
-    # 4. 모듈 등록
-    # --- YOLO ---
-    yolo_cfg = config.get("yolo", {})
-    if yolo_cfg.get("enabled", True) and not args.no_yolo:
-        yolo_module = YOLODetectionModule(
-            event_bus=event_bus,
-            config={
-                "model_path": yolo_cfg.get("model_path", "yolov8n.pt"),
-                "confidence": yolo_cfg.get("confidence", 0.3),
-                "pid_kp": ptz_cfg.get("pid_kp", 0.4),
-                "dead_zone": ptz_cfg.get("dead_zone_pixels", 50),
-                "patrol_speed": ptz_cfg.get("patrol_speed", 0.2),
-                "target_classes": yolo_cfg.get("target_classes"),
-            },
-            ptz=ptz,
-            spatial_context=spatial_context,
+
+def parse_float(value: Any, default: float) -> float:
+    try:
+        if value is None:
+            return float(default)
+        return float(value)
+    except (TypeError, ValueError):
+        return float(default)
+
+
+def parse_optional_float(value: Any) -> Optional[float]:
+    try:
+        if value is None:
+            return None
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+class MicContextFusionApp:
+    def __init__(self, config: Dict[str, Any]):
+        self.config = config
+        self.logger = logging.getLogger("MicContextFusion")
+
+        try:
+            from integrated_system.core.event_bus import EventBus
+            from integrated_system.core.orchestrator import Orchestrator
+            from integrated_system.modules.mic_array import MicArrayModule
+            from integrated_system.modules.ptz_controller import PTZPriority, UnifiedPTZController
+            from integrated_system.modules.stt_module import STTModule
+            from integrated_system.modules.stream_manager import SharedStreamManager
+        except ImportError as exc:
+            raise RuntimeError(
+                "integrated_system dependencies are missing. "
+                "Install project requirements first: pip install -r integrated_system/requirements.txt"
+            ) from exc
+
+        self._ptz_priority_mic_doa = PTZPriority.MIC_DOA
+
+        self.event_bus = EventBus(max_workers=6, async_mode=True)
+        self.orchestrator = Orchestrator(self.event_bus)
+
+        camera_cfg = config.get("camera", {})
+        ptz_cfg = config.get("ptz", {})
+        mic_cfg = config.get("mic_array", {})
+        stt_cfg = config.get("stt", {})
+        llm_cfg = config.get("context_llm", {})
+        non_speech_cfg = config.get("non_speech", {}) or {}
+
+        source = parse_camera_source(camera_cfg.get("source", 0))
+        self.stream = SharedStreamManager(source).start()
+
+        self.ptz = UnifiedPTZController(
+            {
+                "camera_ip": ptz_cfg.get("ip", ""),
+                "camera_port": ptz_cfg.get("port", 80),
+                "camera_user": ptz_cfg.get("user", ""),
+                "camera_password": ptz_cfg.get("password", ""),
+                "control_mode": ptz_cfg.get("control_mode", "onvif"),
+            }
         )
-        orch.register(yolo_module)
+        self.ptz.initialize()
 
-    # --- MicArray ---
-    mic_cfg = config.get("mic_array", {})
-    mic_module = None
-    if mic_cfg.get("enabled", True) and not args.no_mic:
-        mic_module = MicArrayModule(
-            event_bus=event_bus,
-            ptz=ptz,
-            spatial_context=spatial_context,
+        self.mic_module = MicArrayModule(
+            event_bus=self.event_bus,
+            ptz=self.ptz,
             agc_max_gain=mic_cfg.get("agc_max_gain", 15.0),
             vad_threshold=mic_cfg.get("vad_threshold", 10.0),
             confidence_threshold=mic_cfg.get("confidence_threshold", 0.6),
@@ -208,427 +172,431 @@ def build_system(config: dict, args) -> tuple:
             zenith_gain=mic_cfg.get("zenith_gain", 10.0),
             history_size=mic_cfg.get("history_size", 10),
         )
-        if orch.register(mic_module):
-            mic_module.start_monitoring()
-
-    # --- STT (Speech-to-Text) ---
-    stt_cfg = config.get("stt", {})
-    stt_module = None
-    if stt_cfg.get("enabled", True) and not args.no_stt:
-        stt_module = STTModule(
-            event_bus=event_bus,
+        self.stt_module = STTModule(
+            event_bus=self.event_bus,
             language=stt_cfg.get("language", "ko-KR"),
             energy_threshold=stt_cfg.get("energy_threshold", 400),
             pause_threshold=stt_cfg.get("pause_threshold", 3.0),
             phrase_time_limit=stt_cfg.get("phrase_time_limit", 15.0),
             dynamic_threshold=stt_cfg.get("dynamic_threshold", True),
         )
-        if orch.register(stt_module):
-            stt_module.start_listening()
 
-    # --- ContextLLM ---
-    llm_cfg = config.get("context_llm", {})
-    if llm_cfg.get("enabled", True) and not args.no_llm:
-        llm_module = ContextLLMModule(
-            event_bus=event_bus,
-            ptz=ptz,
-            model=llm_cfg.get("model", "gpt-4o-mini"),
-            config_path=llm_cfg.get("config_path", "") or None,
-            spatial_context=spatial_context,
+        # ContextLLM app/service 계층을 직접 사용해 결합 (config-first 구조 이식).
+        contextllm_src = PROJECT_ROOT / "contextllm" / "src"
+        if str(contextllm_src) not in sys.path:
+            sys.path.insert(0, str(contextllm_src))
+
+        try:
+            from app.service import ContextLLMService
+        except ImportError as exc:
+            raise RuntimeError(
+                "contextllm app/service import failed. "
+                "Ensure contextllm/src is available and dependencies are installed."
+            ) from exc
+
+        contextllm_config = llm_cfg.get("config_path", "") or str(
+            PROJECT_ROOT / "contextllm" / "config" / "config.yaml"
         )
-        orch.register(llm_module)
+        llm_overrides: Dict[str, Any] = {}
+        if llm_cfg.get("model"):
+            llm_overrides["model"] = llm_cfg["model"]
 
-    # --- ServerReporter ---
-    srv_cfg = config.get("server", {})
-    if srv_cfg.get("enabled", False):
-        server_module = ServerReporterModule(
-            event_bus=event_bus,
-            server_url=srv_cfg.get("url", ""),
-            timeout=srv_cfg.get("timeout", 2.0),
+        self.llm_service = ContextLLMService.from_config(
+            contextllm_config,
+            overrides=llm_overrides or None,
         )
-        orch.register(server_module)
+        if not self._is_llm_available():
+            self.logger.warning(
+                "ContextLLM analyzer is unavailable. "
+                "Set OPENAI_API_KEY (or mic_context_fusion/config.yaml: openai.api_key) "
+                "to enable multimodal analysis."
+            )
 
-    # 5. 파이프라인 정의
-    # ★ 주요 변경: context_llm은 조건 없이 항상 실행
-    #   (내부에서 사람 감지 OR 음성 텍스트 있을 때만 분석 실행)
-    orch.define_pipeline("security", [
-        {"module": "yolo"},
-        {"module": "context_llm"},
-        {"module": "server_reporter"},
-    ])
+        self.non_speech_enabled = parse_bool(non_speech_cfg.get("enabled", True), True)
+        self.non_speech_min_duration = parse_float(non_speech_cfg.get("min_audio_duration", 0.2), 0.2)
+        self.non_speech_cooldown_seconds = parse_float(non_speech_cfg.get("cooldown_seconds", 1.5), 1.5)
+        self.non_speech_analyze_on_detected = parse_bool(
+            non_speech_cfg.get("analyze_on_detected", False),
+            False,
+        )
+        self._last_non_speech_time = 0.0
+        self._non_speech_state_lock = threading.Lock()
+        self.sound_event_detector = None
+        self._init_sound_event_detector(non_speech_cfg)
 
-    orch.define_pipeline("full_analysis", [
-        {"module": "yolo"},
-        {"module": "context_llm"},
-        {"module": "server_reporter"},
-    ])
+        self.ptz_tilt = ptz_cfg.get("tilt_on_doa", -15)
+        self.ptz_settle_seconds = float(ptz_cfg.get("settle_seconds", 1.2))
+        self.max_doa_age_seconds = float(ptz_cfg.get("max_doa_age_seconds", 5.0))
 
-    return orch, event_bus, stream, ptz, mic_module, stt_module, spatial_context
+        self._running = False
+        self._analysis_lock = threading.Lock()
+        self._last_doa_sector: Optional[float] = None
+        self._last_doa_time: float = 0.0
+        self._state_lock = threading.Lock()
 
+        self.event_bus.subscribe("mic.doa_detected", self._on_doa_detected)
+        self.event_bus.subscribe("stt.text_recognized", self._on_stt_text)
+        self.event_bus.subscribe("stt.non_speech_audio", self._on_non_speech_audio)
+        self.event_bus.subscribe("llm.emergency", self._on_emergency)
 
-def run_main_loop(orch: Orchestrator, stream: SharedStreamManager, config: dict, args, stt_module=None) -> None:
-    """
-    메인 루프 - 프레임 수신 → 파이프라인 실행 → 통합 시각화
+    def _is_llm_available(self) -> bool:
+        if self.llm_service is None:
+            return False
+        system = getattr(self.llm_service, "system", None)
+        analyzer = getattr(system, "multimodal_analyzer", None) if system is not None else None
+        return analyzer is not None
 
-    화면 레이아웃:
-    ┌──────────────────────────────────────────────┐
-    │  FPS | Mode | Pipeline | 모듈 상태           │  상단 바
-    ├──────────────────────────────────────────────┤
-    │                                              │
-    │          영상 프레임 (YOLO 박스)              │
-    │                                              │
-    │  ┌─DOA──┐                                    │
-    │  │  ◀   │  (마이크 방향 표시)                │
-    │  └──────┘                                    │
-    ├──────────────────────────────────────────────┤
-    │  🎤 STT: "인식된 텍스트"                     │  하단 패널
-    │  🤖 LLM: [긴급도] 상황 설명                  │
-    └──────────────────────────────────────────────┘
-    """
-    display_cfg = config.get("display", {})
-    pipeline_cfg = config.get("pipeline", {})
-    
-    show_display = display_cfg.get("show_opencv", True) and not args.no_display
-    window_name = display_cfg.get("window_name", "KNU-MM Integrated System")
-    process_every = pipeline_cfg.get("process_every_n_frames", 3)
-    pipeline_name = pipeline_cfg.get("default", "security")
+    def _init_sound_event_detector(self, non_speech_cfg: Dict[str, Any]) -> None:
+        if not self.non_speech_enabled:
+            self.logger.info("Non-speech path disabled by config.")
+            return
 
-    if show_display:
-        cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
+        try:
+            from core.sound_event_detector import SoundEventDetector
+        except ImportError:
+            self.logger.warning(
+                "SoundEventDetector import failed. "
+                "Install TensorFlow + TensorFlow Hub to enable non-speech path."
+            )
+            return
 
-    frame_count = 0
-    fps = 0.0
-    fps_frames = 0
-    fps_time = time.perf_counter()
+        base_cfg = (getattr(self.llm_service, "raw_config", {}) or {}).get("sound_event", {}) or {}
+        detector_cfg = dict(base_cfg)
+        for key in ("model_url", "min_confidence", "trigger_threshold", "top_k", "emergency_keywords"):
+            if key in non_speech_cfg:
+                detector_cfg[key] = non_speech_cfg[key]
 
-    # 표시용 상태 변수
-    display_stt_text = ""
-    display_stt_time = 0.0
-    display_llm = {}
-    display_doa_angle = -1
-    display_yolo_objects = []   # YOLO 결과를 프레임 간 유지
-    display_yolo_mode = "N/A"   # YOLO 모드를 프레임 간 유지
+        self.sound_event_detector = SoundEventDetector(
+            model_url=detector_cfg.get("model_url", "https://tfhub.dev/google/yamnet/1"),
+            min_confidence=detector_cfg.get("min_confidence", 0.12),
+            trigger_threshold=detector_cfg.get("trigger_threshold", 0.25),
+            top_k=detector_cfg.get("top_k", 5),
+            emergency_keywords=detector_cfg.get("emergency_keywords", []),
+        )
 
-    logger = logging.getLogger("MainLoop")
-    logger.info(f"━━━ 메인 루프 시작 (파이프라인: {pipeline_name}, 매 {process_every}프레임) ━━━")
+        if getattr(self.sound_event_detector, "enabled", False):
+            self.logger.info("Non-speech detector ready (YAMNet).")
+        else:
+            self.logger.warning("Non-speech detector is disabled (dependency/model unavailable).")
 
-    # 모듈 상태 출력
-    for name, status in orch.list_modules().items():
-        icon = "✅" if status["initialized"] else "⛔"
-        logger.info(f"  {icon} {name}: {'활성' if status['initialized'] else '비활성'}")
+    def _register_modules(self) -> None:
+        mic_ready = self.orchestrator.register(self.mic_module)
+        if mic_ready:
+            self.mic_module.start_monitoring()
+        else:
+            self.logger.warning("MicArray module is not ready.")
 
-    # STT 텍스트 수신용 이벤트 핸들러
-    def on_stt_display(event: Event):
-        nonlocal display_stt_text, display_stt_time
-        display_stt_text = event.data.get("text", "")
-        display_stt_time = time.time()
+        stt_ready = self.orchestrator.register(self.stt_module)
+        if stt_ready:
+            self.stt_module.start_listening()
+        else:
+            self.logger.warning("STT module is not ready.")
 
-    def on_doa_display(event: Event):
-        nonlocal display_doa_angle
-        display_doa_angle = event.data.get("sector_angle", -1)
+        llm_ready = self._is_llm_available()
 
-    event_bus = orch.event_bus
-    event_bus.subscribe("stt.text_recognized", on_stt_display)
-    event_bus.subscribe("mic.doa_detected", on_doa_display)
+        self.logger.info(
+            "Module status - mic: %s, stt: %s, llm: %s",
+            "ready" if mic_ready else "disabled",
+            "ready" if stt_ready else "disabled",
+            "ready" if llm_ready else "disabled",
+        )
 
-    try:
-        while True:
-            frame = stream.get_frame()
+    def start(self) -> None:
+        self._register_modules()
+        self._running = True
+        self.logger.info("Fusion workflow started.")
+        self.logger.info(
+            "Flow: mic.doa_detected -> PTZ move -> (stt.text_recognized | stt.non_speech_audio) -> frame capture -> ContextLLM"
+        )
+
+    def stop(self) -> None:
+        if not self._running:
+            return
+        self._running = False
+        self.logger.info("Stopping fusion workflow...")
+
+        try:
+            self.orchestrator.shutdown_all()
+        finally:
+            try:
+                self.stream.release()
+            except Exception:
+                pass
+            try:
+                self.ptz.shutdown()
+            except Exception:
+                pass
+
+        self.logger.info("Fusion workflow stopped.")
+
+    def run_forever(self) -> None:
+        while self._running:
+            time.sleep(0.2)
+
+    def _on_doa_detected(self, event) -> None:
+        sector = event.data.get("sector_angle")
+        if sector is None:
+            return
+
+        with self._state_lock:
+            self._last_doa_sector = float(sector)
+            self._last_doa_time = time.time()
+
+        self.ptz.request_move(
+            pan=float(sector),
+            tilt=self.ptz_tilt,
+            priority=self._ptz_priority_mic_doa,
+            owner="mic_context_fusion",
+            move_type="absolute",
+        )
+        self.logger.info("DOA detected: %.1f deg -> PTZ move requested.", float(sector))
+
+    def _on_stt_text(self, event) -> None:
+        text = (event.data.get("text") or "").strip()
+        if not text:
+            return
+
+        if self._analysis_lock.locked():
+            self.logger.info("Analysis in progress, ignored STT text=%s", text)
+            return
+
+        # Keep event callbacks non-blocking.
+        threading.Thread(
+            target=self._run_multimodal_analysis,
+            args=(text,),
+            kwargs={"trigger_source": "speech"},
+            daemon=True,
+            name="FusionAnalysisWorker",
+        ).start()
+
+    def _on_non_speech_audio(self, event) -> None:
+        if not self.non_speech_enabled or self.sound_event_detector is None:
+            return
+
+        if self._analysis_lock.locked():
+            return
+
+        audio = event.data.get("audio")
+        if audio is None:
+            return
+
+        duration = parse_float(event.data.get("duration", 0.0), 0.0)
+        if duration < self.non_speech_min_duration:
+            return
+
+        now = time.time()
+        with self._non_speech_state_lock:
+            if now - self._last_non_speech_time < self.non_speech_cooldown_seconds:
+                return
+            self._last_non_speech_time = now
+
+        doa_hint = event.data.get("doa_angle")
+        threading.Thread(
+            target=self._run_non_speech_analysis,
+            args=(audio, doa_hint),
+            daemon=True,
+            name="FusionNonSpeechWorker",
+        ).start()
+
+    def _run_non_speech_analysis(self, audio: Any, doa_hint: Optional[float]) -> None:
+        if self.sound_event_detector is None:
+            return
+
+        detection = self.sound_event_detector.detect_from_audio(audio)
+        has_detected_event = bool(detection.get("event_detected", False))
+        has_trigger = bool(detection.get("triggered", False))
+
+        if not has_detected_event:
+            return
+        if not has_trigger and not self.non_speech_analyze_on_detected:
+            return
+
+        top_event = detection.get("top_event") or "unknown_sound"
+        top_conf = parse_float(detection.get("top_confidence", 0.0), 0.0)
+        self.logger.info(
+            "Non-speech event detected: %s (%.2f), triggered=%s",
+            top_event,
+            top_conf,
+            has_trigger,
+        )
+
+        analysis_text = f"[음성 텍스트 없음] 비음성 이벤트 감지: {top_event}"
+        self._run_multimodal_analysis(
+            text=analysis_text,
+            sound_event=detection,
+            trigger_source="sound_event",
+            doa_hint=doa_hint,
+        )
+
+    def _run_multimodal_analysis(
+        self,
+        text: str,
+        sound_event: Optional[Dict[str, Any]] = None,
+        trigger_source: str = "speech",
+        doa_hint: Optional[float] = None,
+    ) -> None:
+        if not self._running:
+            return
+
+        if not self._is_llm_available():
+            self.logger.warning("ContextLLM analyzer unavailable; skip trigger=%s", trigger_source)
+            return
+
+        if not self._analysis_lock.acquire(blocking=False):
+            self.logger.info("Analysis in progress, skipped trigger=%s text=%s", trigger_source, text)
+            return
+
+        try:
+            doa_hint_float = parse_optional_float(doa_hint)
+            if doa_hint_float is not None:
+                doa = doa_hint_float
+                doa_age = 0.0
+            else:
+                now = time.time()
+                with self._state_lock:
+                    doa = self._last_doa_sector
+                    doa_age = now - self._last_doa_time
+
+            if doa is not None and doa_age <= self.max_doa_age_seconds:
+                self.ptz.request_move(
+                    pan=float(doa),
+                    tilt=self.ptz_tilt,
+                    priority=self._ptz_priority_mic_doa,
+                    owner="mic_context_fusion",
+                    move_type="absolute",
+                )
+                time.sleep(self.ptz_settle_seconds)
+
+            frame = self._capture_frame_with_retry(max_retry=10, retry_interval=0.1)
             if frame is None:
-                time.sleep(0.01)
-                continue
+                self.logger.warning("Frame capture failed. ContextLLM analysis skipped.")
+                return
 
-            frame_count += 1
-            fps_frames += 1
+            additional_context = self._build_additional_context(doa=doa)
+            service_result = self.llm_service.analyze_frame(
+                text=text,
+                frame=frame,
+                additional_context=additional_context,
+                sound_event=sound_event,
+            )
+            if service_result.get("success"):
+                analysis = service_result.get("analysis", {}) or {}
+                priority = service_result.get("priority", "LOW")
+                urgency = service_result.get("urgency", "LOW")
+                situation = analysis.get("situation_type", "N/A")
+                self.logger.info(
+                    'ContextLLM analyzed: trigger=%s priority=%s urgency=%s situation=%s text="%s"',
+                    trigger_source,
+                    priority,
+                    urgency,
+                    situation,
+                    text,
+                )
+                self.event_bus.publish_simple(
+                    "fusion.analysis_complete",
+                    {
+                        "text": text,
+                        "doa_sector": doa,
+                        "trigger_source": trigger_source,
+                        "sound_event": sound_event,
+                        "priority": priority,
+                        "urgency": urgency,
+                        "situation_type": situation,
+                        "analysis": analysis,
+                    },
+                    source="mic_context_fusion",
+                )
 
-            # FPS 계산
-            now = time.perf_counter()
-            if now - fps_time >= 1.0:
-                fps = fps_frames / (now - fps_time)
-                fps_frames = 0
-                fps_time = now
+                if service_result.get("is_emergency"):
+                    self.event_bus.publish_simple(
+                        "llm.emergency",
+                        {"result": analysis, "urgency": urgency, "situation": situation},
+                        source="mic_context_fusion",
+                        priority=2,
+                    )
+            else:
+                self.logger.info(
+                    "ContextLLM failed: trigger=%s reason=%s text=%s",
+                    trigger_source,
+                    service_result.get("error", "unknown"),
+                    text,
+                )
+        except Exception as exc:
+            self.logger.error("Fusion analysis error: %s", exc)
+        finally:
+            self._analysis_lock.release()
 
-            # N프레임마다 파이프라인 실행
-            results = {}
-            if frame_count % process_every == 0:
-                results = orch.run_pipeline(pipeline_name, {
-                    "frame": frame,
-                    "timestamp": time.time(),
-                    "frame_count": frame_count,
-                })
+    def _build_additional_context(self, doa: Optional[float]) -> Optional[str]:
+        contexts = []
+        contexts.append("doa_sector=unknown" if doa is None else f"doa_sector={doa:.1f}")
+        return "\n\n".join([ctx for ctx in contexts if ctx]) or None
 
-            # YOLO 결과 갱신 (프레임 간 유지)
-            yolo_result = results.get("yolo", {})
-            if "objects" in yolo_result:
-                display_yolo_objects = yolo_result["objects"]
-                display_yolo_mode = yolo_result.get("mode", "N/A")
+    def _capture_frame_with_retry(self, max_retry: int, retry_interval: float):
+        for _ in range(max_retry):
+            frame = self.stream.get_frame()
+            if frame is not None:
+                return frame
+            time.sleep(retry_interval)
+        return None
 
-            # LLM 결과 갱신
-            llm_result = results.get("context_llm", {})
-            if llm_result.get("analyzed"):
-                display_llm = llm_result
-
-            # ─── 통합 시각화 ───
-            if show_display:
-                display_frame = frame.copy()
-                h, w = display_frame.shape[:2]
-
-                # ── 1. YOLO 박스 그리기 (프레임 간 유지된 결과 사용) ──
-                yolo_mod = orch.get_module("yolo")
-                if yolo_mod and display_yolo_objects:
-                    display_frame = yolo_mod.get_annotated_frame(display_frame, display_yolo_objects)
-
-                # ── 2. 상단 정보 바 (반투명 검정) ──
-                overlay = display_frame.copy()
-                cv2.rectangle(overlay, (0, 0), (w, 80), (0, 0, 0), -1)
-                cv2.addWeighted(overlay, 0.7, display_frame, 0.3, 0, display_frame)
-
-                # FPS
-                cv2.putText(display_frame, f"FPS: {fps:.1f}", (10, 25),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
-
-                # YOLO 모드 + PTZ 제어권 표시
-                mode_text = f"Vision: {display_yolo_mode}"
-                
-                # PTZ 제어권 확인
-                try:
-                    ptz_ctl = orch.ptz_controller
-                    if ptz_ctl:
-                        owner = ptz_ctl._current_owner
-                        priority = ptz_ctl._current_priority.name
-                        if owner == "mic_array":
-                            mode_text += " | Audio Control (DOA)"
-                        elif owner == "context_llm":
-                            mode_text += " | LLM Control"
-                        elif owner and owner != "yolo":
-                            mode_text += f" | PTZ: {owner}"
-                except Exception:
-                    pass
-
-                cv2.putText(display_frame, mode_text, (10, 55),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 255, 255), 2)
-
-                # 파이프라인 표시
-                cv2.putText(display_frame, f"Pipeline: {pipeline_name}", (180, 25),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.55, (200, 200, 200), 1)
-
-                # 모듈 상태 인디케이터 (우상단)
-                module_status_x = w - 280
-                statuses = [
-                    ("YOLO", orch.get_module("yolo")),
-                    ("MIC", orch.get_module("mic_array")),
-                    ("STT", orch.get_module("stt")),
-                    ("LLM", orch.get_module("context_llm")),
-                ]
-                for i, (label, mod) in enumerate(statuses):
-                    sx = module_status_x + i * 70
-                    is_active = mod and mod.is_ready
-                    color = (0, 255, 0) if is_active else (80, 80, 80)
-                    cv2.putText(display_frame, label, (sx, 25),
-                                cv2.FONT_HERSHEY_SIMPLEX, 0.45, color, 1)
-                    # 상태 점
-                    cv2.circle(display_frame, (sx + 15, 40), 5, color, -1)
-
-                # ── 3. DOA 방향 표시 (좌하단 미니 컴퍼스) ──
-                mic_mod = orch.get_module("mic_array")
-                if mic_mod and mic_mod.is_ready and display_doa_angle >= 0:
-                    _draw_doa_compass(display_frame, display_doa_angle, x=60, y=h - 80, radius=40)
-                elif display_doa_angle >= 0:
-                    # DOA 텍스트만 표시 (마이크 모듈 없어도 이벤트 수신 가능)
-                    cv2.putText(display_frame, f"DOA: {display_doa_angle} deg",
-                                (10, h - 90), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 200, 0), 1)
-
-                # ── 4. 하단 패널 (STT + LLM 결과) ──
-                panel_h = 100
-                panel_y = h - panel_h
-
-                # 반투명 하단 배경
-                overlay2 = display_frame.copy()
-                cv2.rectangle(overlay2, (0, panel_y), (w, h), (0, 0, 0), -1)
-                cv2.addWeighted(overlay2, 0.75, display_frame, 0.25, 0, display_frame)
-
-                # STT 텍스트 표시 (10초간 유지)
-                stt_text_display = display_stt_text if (time.time() - display_stt_time < 10) else ""
-                if stt_text_display:
-                    # 마이크 아이콘 + 텍스트
-                    cv2.putText(display_frame, "[MIC]", (10, panel_y + 25),
-                                cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 200, 255), 1)
-
-                    # 텍스트가 길면 잘라서 표시
-                    max_chars = w // 12
-                    display_text = stt_text_display[:max_chars]
-                    if len(stt_text_display) > max_chars:
-                        display_text += "..."
-                    cv2.putText(display_frame, display_text, (70, panel_y + 25),
-                                cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255, 255, 255), 1)
-                else:
-                    cv2.putText(display_frame, "[MIC] (waiting...)", (10, panel_y + 25),
-                                cv2.FONT_HERSHEY_SIMPLEX, 0.5, (100, 100, 100), 1)
-
-                # LLM 분석 결과 표시
-                if display_llm.get("analyzed"):
-                    priority = display_llm.get("priority", "LOW")
-                    is_emergency = display_llm.get("is_emergency", False)
-                    urgency = display_llm.get("urgency", "")
-                    situation = display_llm.get("situation_type", "")
-                    speech_text = display_llm.get("speech_text", "")
-
-                    # 긴급도에 따른 색상
-                    if is_emergency:
-                        llm_color = (0, 0, 255)   # 빨강
-                        priority_icon = "[EMERGENCY]"
-                    elif priority in ("CRITICAL", "HIGH"):
-                        llm_color = (0, 128, 255)  # 주황
-                        priority_icon = f"[{priority}]"
-                    elif priority == "MEDIUM":
-                        llm_color = (0, 255, 255)  # 노랑
-                        priority_icon = f"[{priority}]"
-                    else:
-                        llm_color = (0, 255, 0)    # 초록
-                        priority_icon = f"[{priority}]"
-
-                    cv2.putText(display_frame, "[LLM]", (10, panel_y + 55),
-                                cv2.FONT_HERSHEY_SIMPLEX, 0.5, (200, 100, 255), 1)
-                    cv2.putText(display_frame, f"{priority_icon} {urgency}", (70, panel_y + 55),
-                                cv2.FONT_HERSHEY_SIMPLEX, 0.55, llm_color, 2)
-
-                    # 상황 요약 (2번째 줄)
-                    if situation:
-                        cv2.putText(display_frame, f"Situation: {situation}", (70, panel_y + 80),
-                                    cv2.FONT_HERSHEY_SIMPLEX, 0.45, (200, 200, 200), 1)
-
-                    # 긴급 시 화면 테두리 깜빡임
-                    if is_emergency and int(time.time() * 2) % 2 == 0:
-                        cv2.rectangle(display_frame, (0, 0), (w - 1, h - 1), (0, 0, 255), 4)
-                else:
-                    cv2.putText(display_frame, "[LLM] (no analysis yet)", (10, panel_y + 55),
-                                cv2.FONT_HERSHEY_SIMPLEX, 0.5, (100, 100, 100), 1)
-
-                # 구분선
-                cv2.line(display_frame, (0, panel_y), (w, panel_y), (80, 80, 80), 1)
-                cv2.line(display_frame, (0, 80), (w, 80), (80, 80, 80), 1)
-
-                cv2.imshow(window_name, display_frame)
-
-                key = cv2.waitKey(1) & 0xFF
-                if key == ord('q'):
-                    break
-                elif key == ord('p'):
-                    # 파이프라인 전환
-                    pipeline_name = "full_analysis" if pipeline_name == "security" else "security"
-                    logger.info(f"파이프라인 전환 → {pipeline_name}")
-
-    except KeyboardInterrupt:
-        logger.info("\n사용자 중단 (Ctrl+C)")
+    def _on_emergency(self, event) -> None:
+        result = event.data.get("result", {})
+        self.logger.warning(
+            "EMERGENCY detected: urgency=%s summary=%s",
+            result.get("urgency", "N/A"),
+            result.get("summary", "N/A"),
+        )
 
 
-def _draw_doa_compass(frame, angle_deg: float, x: int, y: int, radius: int = 40):
-    """
-    DOA 방향 미니 컴퍼스 그리기
-
-    Args:
-        frame: OpenCV 프레임
-        angle_deg: DOA 각도 (0=전방, 시계방향)
-        x, y: 컴퍼스 중심 좌표
-        radius: 컴퍼스 반지름
-    """
-    # 배경 원 (반투명)
-    overlay = frame.copy()
-    cv2.circle(overlay, (x, y), radius + 5, (0, 0, 0), -1)
-    cv2.addWeighted(overlay, 0.5, frame, 0.5, 0, frame)
-
-    # 외곽 원
-    cv2.circle(frame, (x, y), radius, (100, 100, 100), 1)
-
-    # 방위 표시
-    cv2.putText(frame, "N", (x - 5, y - radius - 5),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.3, (150, 150, 150), 1)
-
-    # 방향 화살표 (angle_deg → 라디안, OpenCV 좌표계)
-    # DOA 0° = 전방(위), 시계방향 증가
-    rad = math.radians(angle_deg - 90)  # OpenCV: 0°=오른쪽이므로 -90
-    end_x = int(x + radius * 0.8 * math.cos(rad))
-    end_y = int(y + radius * 0.8 * math.sin(rad))
-
-    cv2.arrowedLine(frame, (x, y), (end_x, end_y), (0, 200, 255), 2, tipLength=0.3)
-
-    # 각도 텍스트
-    cv2.putText(frame, f"{int(angle_deg)}", (x - 12, y + radius + 15),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 200, 255), 1)
-
-
-def main():
+def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description='KNU-MM 통합 멀티모달 관제 시스템',
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="""
-사용 예시:
-  python main.py                      # 전체 모듈 실행
-  python main.py --no-mic             # 마이크 없이 (YOLO + STT + LLM)
-  python main.py --no-stt             # 음성 인식 없이 (YOLO + LLM만)
-  python main.py --no-llm             # LLM 없이 (YOLO + 마이크만)
-  python main.py --no-display         # 화면 없이 (서버 전송만)
-  python main.py --config my.yaml     # 커스텀 설정
-
-실행 중 키:
-  Q: 종료
-  P: 파이프라인 전환 (security ↔ full_analysis)
-        """
+        description="Mic Array + ContextLLM fusion workflow runner"
     )
-    parser.add_argument('--config', default=str(Path(__file__).parent / 'config.yaml'), help='설정 파일 경로')
-    parser.add_argument('--no-mic', action='store_true', help='마이크 어레이 비활성화')
-    parser.add_argument('--no-stt', action='store_true', help='음성 인식(STT) 비활성화')
-    parser.add_argument('--no-llm', action='store_true', help='ContextLLM 비활성화')
-    parser.add_argument('--no-yolo', action='store_true', help='YOLO 비활성화')
-    parser.add_argument('--no-display', action='store_true', help='OpenCV 디스플레이 비활성화')
-    parser.add_argument('--debug', action='store_true', help='DEBUG 로깅 활성화')
+    parser.add_argument(
+        "--config",
+        type=str,
+        default=str(DEFAULT_CONFIG_PATH),
+        help="YAML config path",
+    )
+    parser.add_argument(
+        "--openai-api-key",
+        type=str,
+        default="",
+        help="OpenAI API key override (highest priority)",
+    )
+    return parser.parse_args()
 
-    args = parser.parse_args()
 
-    # 설정 로드
+def main() -> int:
+    args = parse_args()
     config = load_config(args.config)
-    
-    if args.debug:
-        config.setdefault("logging", {})["level"] = "DEBUG"
-    
     setup_logging(config)
-    logger = logging.getLogger("Main")
 
-    logger.info("=" * 60)
-    logger.info("  KNU-MM 통합 멀티모달 관제 시스템")
-    logger.info("  시각(YOLO) + 청각(MicArray+STT) → LLM 통합 분석")
-    logger.info("=" * 60)
+    # Load API keys and camera envs, if present.
+    root_env = PROJECT_ROOT / ".env"
+    ctx_env = PROJECT_ROOT / "contextllm" / "config" / ".env"
+    if root_env.exists():
+        load_dotenv(root_env)
+    if ctx_env.exists():
+        load_dotenv(ctx_env)
+    apply_openai_api_key(config, args.openai_api_key)
 
-    # 시스템 빌드
-    orch, event_bus, stream, ptz, mic_module, stt_module, spatial_context = build_system(config, args)
+    app = MicContextFusionApp(config)
 
-    # Graceful Shutdown
-    def signal_handler(sig, frame):
-        logger.info("\n종료 신호 수신...")
-        if stt_module:
-            stt_module.stop_listening()
-        orch.shutdown_all()
-        stream.release()
-        ptz.shutdown()
-        cv2.destroyAllWindows()
-        sys.exit(0)
+    def _shutdown_handler(signum, _frame):
+        logging.getLogger("MicContextFusion").info("Signal received: %s", signum)
+        app.stop()
 
-    signal.signal(signal.SIGINT, signal_handler)
-    signal.signal(signal.SIGTERM, signal_handler)
+    signal.signal(signal.SIGINT, _shutdown_handler)
+    signal.signal(signal.SIGTERM, _shutdown_handler)
 
-    # 메인 루프 실행
+    app.start()
     try:
-        run_main_loop(orch, stream, config, args, stt_module)
+        app.run_forever()
     finally:
-        logger.info("시스템 종료 중...")
-        if stt_module:
-            stt_module.stop_listening()
-        orch.shutdown_all()
-        stream.release()
-        ptz.shutdown()
-        cv2.destroyAllWindows()
-        logger.info("시스템 종료 완료")
+        app.stop()
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())
