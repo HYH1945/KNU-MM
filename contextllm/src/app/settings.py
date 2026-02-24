@@ -47,6 +47,15 @@ def _to_float(value: Any, default: float) -> float:
         return default
 
 
+def _to_optional_float(value: Any) -> Optional[float]:
+    try:
+        if value is None:
+            return None
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
 def _to_str(value: Any, default: str = "") -> str:
     if value is None:
         return default
@@ -67,6 +76,10 @@ class AnalysisSettings:
     iterations: Optional[int] = None
     analyze_all_testset: bool = False
     testset_index: int = 0
+    llm_frame_count: int = 4
+    prebuffer_seconds: Optional[float] = None
+    postbuffer_seconds: Optional[float] = None
+    buffer_window_seconds: Optional[float] = None
     voice_characteristics: bool = True
     streaming: bool = False
     parallel: bool = False
@@ -93,6 +106,7 @@ class DisplaySettings:
     web_enabled: bool = False
     web_port: int = 5000
     opencv_live: bool = True
+    keep_open_after_run: bool = False
 
 
 @dataclass
@@ -164,6 +178,10 @@ def build_settings(raw: Dict[str, Any]) -> ContextLLMSettings:
             iterations=None if analysis_raw.get("iterations") is None else _to_int(analysis_raw.get("iterations"), 0),
             analyze_all_testset=_to_bool(analysis_raw.get("analyze_all_testset"), False),
             testset_index=_to_int(analysis_raw.get("testset_index"), 0),
+            llm_frame_count=max(1, _to_int(analysis_raw.get("llm_frame_count"), 4)),
+            prebuffer_seconds=_to_optional_float(analysis_raw.get("prebuffer_seconds")),
+            postbuffer_seconds=_to_optional_float(analysis_raw.get("postbuffer_seconds")),
+            buffer_window_seconds=_to_optional_float(analysis_raw.get("buffer_window_seconds")),
             voice_characteristics=_to_bool(analysis_raw.get("voice_characteristics"), True),
             streaming=_to_bool(analysis_raw.get("streaming"), False),
             parallel=_to_bool(analysis_raw.get("parallel"), False),
@@ -184,6 +202,7 @@ def build_settings(raw: Dict[str, Any]) -> ContextLLMSettings:
             web_enabled=_to_bool(display_raw.get("web_enabled"), False),
             web_port=_to_int(display_raw.get("web_port"), 5000),
             opencv_live=_to_bool(display_raw.get("opencv_live"), True),
+            keep_open_after_run=_to_bool(display_raw.get("keep_open_after_run"), False),
         ),
         speech=SpeechSettings(
             enabled=_to_bool(speech_raw.get("enabled"), True),

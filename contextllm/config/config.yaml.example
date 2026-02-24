@@ -30,6 +30,10 @@ analysis:
   default_text: ""              # 음성 대신 사용할 기본 텍스트
   iterations: null              # null: 무한 반복, 숫자: N회 반복
   analyze_all_testset: false    # testset 모드에서 전체 파일 분석
+  llm_frame_count: 4            # LLM에 전달할 최대 프레임 수
+  prebuffer_seconds: 1.5        # 실시간 프레임 프리버퍼(초). null이면 자동 계산
+  postbuffer_seconds: 0.5       # 실시간 프레임 포스트버퍼(초). null이면 자동 계산
+  buffer_window_seconds: 8.0    # 버퍼 보관 길이(초). 프리/포스트보다 작으면 자동 보정
   parallel: false               # 호환 옵션 (현재는 순차 모니터링과 동일)
   voice_characteristics: false  # 음성 특성 분석 활성화
   streaming: false              # OpenAI 응답 스트리밍
@@ -48,7 +52,7 @@ media_test:
 
 # 다운샘플링 설정
 downsampling:
-  max_image_size: 640           # 최대 이미지 크기 (픽셀)
+  max_image_size: 480           # 최대 이미지 크기 (픽셀, 낮출수록 빠름)
   jpeg_quality: 75              # JPEG 품질 (1-100)
   video_fps: 2.0                # 분석용 FPS
   max_video_frames: 10          # 최대 분석 프레임 수
@@ -59,6 +63,7 @@ display:
   web_enabled: false            # 웹 대시보드 활성화
   web_port: 5000                # 웹 대시보드 포트 (localhost만)
   opencv_live: true             # OpenCV 라이브 디스플레이 (라이브 모드만)
+  keep_open_after_run: false    # 배치 분석 종료 후 웹 대시보드 유지
 
 # 로깅 설정
 logging:
@@ -69,6 +74,10 @@ logging:
 # 음성 인식 설정
 speech:
   enabled: true                 # true: 음성 트리거 사용, false: 음성 비활성
+  language: "ko-KR"             # 기본 STT 언어
+  recognition_languages:        # 파일/비디오 STT 언어 후보 (순서대로 시도)
+    - "ko-KR"
+    - "en-US"
   energy_threshold: 400         # 음성 감지 민감도 (낮을수록 민감)
   pause_threshold: 0.8          # 문장 끝 판단 무음 시간(초)
   dynamic_threshold: false      # 동적 임계값 사용 여부

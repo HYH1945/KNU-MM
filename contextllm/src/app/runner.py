@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import time
 from typing import Callable, Dict
 
 try:
@@ -57,6 +58,10 @@ class ContextLLMRunner:
 
         try:
             handlers[mode]()
+            if web_dashboard_started and self.settings.display.keep_open_after_run:
+                print("🌐 배치 실행이 끝났습니다. 웹 대시보드를 유지합니다. 종료하려면 Ctrl+C를 누르세요.")
+                while True:
+                    time.sleep(1)
         finally:
             if web_dashboard_started:
                 self._stop_web_dashboard()
@@ -82,6 +87,10 @@ class ContextLLMRunner:
             pause_threshold=self.settings.speech.pause_threshold,
             dynamic_threshold=self.settings.speech.dynamic_threshold,
             enable_speech=speech_enabled,
+            llm_frame_count=self.settings.analysis.llm_frame_count,
+            live_prebuffer_seconds=self.settings.analysis.prebuffer_seconds,
+            live_postbuffer_seconds=self.settings.analysis.postbuffer_seconds,
+            live_max_buffer_seconds=self.settings.analysis.buffer_window_seconds,
         )
 
     def _run_monitoring(self, system) -> None:

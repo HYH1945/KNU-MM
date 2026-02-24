@@ -21,7 +21,7 @@ import base64
 import logging
 from datetime import datetime
 from pathlib import Path
-from typing import Optional, Dict, Any, Union
+from typing import Optional, Dict, Any, List, Union
 import numpy as np
 
 logger = logging.getLogger(__name__)
@@ -74,6 +74,7 @@ except ImportError:
 class MultimodalAnalyzer:
     """멀티모달 컨텍스트 분석기 (오디오 + 비전)"""
     PRIORITY_ORDER = ("CRITICAL", "HIGH", "MEDIUM", "LOW")
+    _PRIORITY_RANK = {"LOW": 0, "MEDIUM": 1, "HIGH": 2, "CRITICAL": 3}
     _LEVEL_MAP = {
         "critical": "CRITICAL",
         "긴급": "CRITICAL",
@@ -87,6 +88,38 @@ class MultimodalAnalyzer:
         "낮음": "LOW",
         "일반": "LOW",
     }
+    _INTRUSION_KEYWORDS = (
+        "침입", "무단침입", "침입 시도", "break-in", "intrusion", "trespass", "forced entry"
+    )
+    _FORCED_ENTRY_KEYWORDS = (
+        "유리 파손", "창문 파손", "문 파손", "문을 부수", "문을 깨", "유리를 깨", "유리를 부수",
+        "shattering glass", "breaking glass", "smashing window", "forced door"
+    )
+    _WEAPON_TOOL_KEYWORDS = (
+        "망치", "해머", "hammer", "빠루", "쇠지렛대", "crowbar", "철근", "bat", "야구방망이"
+    )
+    _VIOLENCE_KEYWORDS = (
+        "폭행", "폭력", "싸움", "난투", "구타", "위협", "협박", "assault", "fight", "attack", "punch", "kick"
+    )
+    _WEAPON_CRIME_KEYWORDS = (
+        "칼", "흉기", "총", "knife", "gun", "rifle", "pistol", "weapon", "machete"
+    )
+    _FIRE_KEYWORDS = (
+        "화재", "불길", "불이 나", "연기", "smoke", "fire", "flame", "burning", "explosion", "폭발"
+    )
+    _MEDICAL_CRITICAL_KEYWORDS = (
+        "의식 없음", "무의식", "호흡 없음", "심정지", "발작", "다량 출혈",
+        "unconscious", "not breathing", "cardiac arrest", "seizure", "major bleeding"
+    )
+    _MEDICAL_ALERT_KEYWORDS = (
+        "쓰러짐", "실신", "부상", "출혈", "통증", "injured", "collapsed", "fall", "fainted"
+    )
+    _ACCIDENT_KEYWORDS = (
+        "교통사고", "충돌", "추돌", "전복", "차량 사고", "crash", "collision", "run over", "hit by car"
+    )
+    _PANIC_KEYWORDS = (
+        "군중 패닉", "패닉", "혼란", "대피", "stampede", "panic", "chaos", "screaming crowd"
+    )
     
     # 기본 시스템 프롬프트 (config가 없을 때 사용)
     DEFAULT_SYSTEM_PROMPT = """당신은 음성, 이미지, 음성 특성을 종합적으로 분석하는 상황 분석 AI입니다.
@@ -248,6 +281,176 @@ class MultimodalAnalyzer:
         mapped = self._LEVEL_MAP.get(str(value).strip().lower())
         return mapped if mapped else default
 
+    def _promote_level(self, current: str, target: str) -> str:
+        current_level = self._normalize_level(current, default="LOW")
+        target_level = self._normalize_level(target, default=current_level)
+        if self._PRIORITY_RANK[target_level] > self._PRIORITY_RANK[current_level]:
+            return target_level
+        return current_level
+
+    @staticmethod
+    def _contains_any(text: str, keywords: tuple[str, ...]) -> bool:
+        lowered = (text or "").lower()
+        return any(keyword.lower() in lowered for keyword in keywords)
+
+    @staticmethod
+    def _collect_guardrail_text_blob(normalized: Dict[str, Any]) -> str:
+        return " ".join(
+            str(normalized.get(key, "") or "")
+            for key in (
+                "context",
+                "situation",
+                "visual_content",
+                "emergency_reason",
+                "urgency_reason",
+                "action",
+                "situation_type",
+                "audio_characteristics",
+            )
+        )
+
+    def _apply_safety_guardrails(
+        self,
+        normalized: Dict[str, Any],
+        priority: str,
+        urgency: str,
+        is_emergency: bool,
+    ) -> tuple[str, str, bool]:
+        """
+        관제 안전장치:
+        침입/폭력/화재/의료응급/사고/군중패닉 징후를 규칙 기반으로 보정.
+        """
+        text_blob = self._collect_guardrail_text_blob(normalized)
+        if not text_blob.strip():
+            return priority, urgency, is_emergency
+
+        has_intrusion = self._contains_any(text_blob, self._INTRUSION_KEYWORDS)
+        has_forced_entry = self._contains_any(text_blob, self._FORCED_ENTRY_KEYWORDS)
+        has_weapon_tool = self._contains_any(text_blob, self._WEAPON_TOOL_KEYWORDS)
+        has_violence = self._contains_any(text_blob, self._VIOLENCE_KEYWORDS)
+        has_weapon_crime = self._contains_any(text_blob, self._WEAPON_CRIME_KEYWORDS)
+        has_fire = self._contains_any(text_blob, self._FIRE_KEYWORDS)
+        has_medical_critical = self._contains_any(text_blob, self._MEDICAL_CRITICAL_KEYWORDS)
+        has_medical_alert = self._contains_any(text_blob, self._MEDICAL_ALERT_KEYWORDS)
+        has_accident = self._contains_any(text_blob, self._ACCIDENT_KEYWORDS)
+        has_panic = self._contains_any(text_blob, self._PANIC_KEYWORDS)
+
+        # (target_priority, situation_type, reason, action)
+        candidate_rules: List[tuple[str, str, str, str]] = []
+
+        forced_break_in = has_forced_entry and (has_intrusion or has_weapon_tool)
+        if forced_break_in:
+            candidate_rules.append(
+                (
+                    "CRITICAL",
+                    "SECURITY",
+                    "영상에서 출입구/유리 파손과 강제 진입 시도가 관측되어 즉시 대응이 필요한 침입 위협으로 판단",
+                    "즉시 보안 인력 출동 및 경찰 신고, 현장 접근 통제",
+                )
+            )
+        elif has_intrusion or has_forced_entry:
+            candidate_rules.append(
+                (
+                    "HIGH",
+                    "SECURITY",
+                    "영상 내 무단 진입/침입 징후가 확인되어 긴급 보안 대응 필요",
+                    "보안 담당자 즉시 확인 및 출입 통제 강화",
+                )
+            )
+
+        if has_violence and (has_weapon_crime or has_weapon_tool):
+            candidate_rules.append(
+                (
+                    "CRITICAL",
+                    "SECURITY",
+                    "흉기/도구 동반 폭력 징후가 확인되어 인명 피해 위험이 높음",
+                    "경찰 즉시 신고 및 현장 인원 대피 유도",
+                )
+            )
+        elif has_violence:
+            candidate_rules.append(
+                (
+                    "HIGH",
+                    "SECURITY",
+                    "폭력/난투 징후가 확인되어 즉각적인 현장 개입 필요",
+                    "보안 인력 긴급 출동 및 분리 조치 준비",
+                )
+            )
+
+        if has_fire:
+            candidate_rules.append(
+                (
+                    "CRITICAL",
+                    "FIRE",
+                    "화재/연기/폭발 징후가 확인되어 즉시 소방 대응이 필요",
+                    "즉시 소방 신고 및 건물 대피 방송/유도 시행",
+                )
+            )
+
+        if has_medical_critical:
+            candidate_rules.append(
+                (
+                    "CRITICAL",
+                    "MEDICAL",
+                    "의식저하/호흡문제/발작 등 중증 의료 응급 징후가 확인됨",
+                    "즉시 119 신고 및 현장 응급처치 인력 호출",
+                )
+            )
+        elif has_medical_alert:
+            candidate_rules.append(
+                (
+                    "HIGH",
+                    "MEDICAL",
+                    "쓰러짐/부상 징후가 확인되어 신속한 의료 확인이 필요",
+                    "현장 상태 확인 및 응급요원 출동 준비",
+                )
+            )
+
+        if has_accident:
+            candidate_rules.append(
+                (
+                    "HIGH",
+                    "ACCIDENT",
+                    "충돌/교통사고 징후가 확인되어 현장 안전조치가 필요",
+                    "사고 지점 접근 통제 및 구급/경찰 연계",
+                )
+            )
+
+        if has_panic:
+            candidate_rules.append(
+                (
+                    "HIGH",
+                    "ACCIDENT",
+                    "군중 패닉/혼란 징후가 확인되어 2차 사고 위험이 존재",
+                    "군중 분산 유도 및 비상 동선 확보",
+                )
+            )
+
+        if not candidate_rules:
+            return priority, urgency, is_emergency
+
+        selected_rule = max(
+            candidate_rules,
+            key=lambda rule: self._PRIORITY_RANK[self._normalize_level(rule[0], default="LOW")],
+        )
+        target_level, target_type, reason, action = selected_rule
+
+        promoted_priority = self._promote_level(priority, target_level)
+        promoted_urgency = self._promote_level(urgency, promoted_priority)
+
+        if normalized.get("situation_type") in {"UNKNOWN", "NORMAL", "", None}:
+            normalized["situation_type"] = target_type
+
+        # 규칙 승격이 발생했거나 응급 사유가 비어 있으면 보정 사유/조치를 명시.
+        original_rank = self._PRIORITY_RANK[self._normalize_level(priority, default="LOW")]
+        promoted_rank = self._PRIORITY_RANK[promoted_priority]
+        if promoted_rank > original_rank or not normalized.get("emergency_reason"):
+            normalized["emergency_reason"] = reason
+        if promoted_rank > original_rank or not normalized.get("action") or normalized.get("action") == "모니터링 지속":
+            normalized["action"] = action
+
+        return promoted_priority, promoted_urgency, True
+
     def _normalize_analysis_result(self, result: Dict[str, Any]) -> Dict[str, Any]:
         """LLM 응답 스키마를 통일."""
         normalized = dict(result or {})
@@ -270,10 +473,6 @@ class MultimodalAnalyzer:
             priority = "HIGH"
             urgency = "HIGH"
 
-        normalized["priority"] = priority
-        normalized["urgency"] = urgency
-        normalized["is_emergency"] = is_emergency
-
         # 공통 필드 기본값 보정
         normalized.setdefault("context", "")
         normalized.setdefault("situation", "")
@@ -282,6 +481,16 @@ class MultimodalAnalyzer:
         normalized.setdefault("visual_content", "")
         normalized.setdefault("audio_visual_consistency", "UNKNOWN")
         normalized.setdefault("action", "모니터링 지속")
+
+        priority, urgency, is_emergency = self._apply_safety_guardrails(
+            normalized=normalized,
+            priority=priority,
+            urgency=urgency,
+            is_emergency=is_emergency,
+        )
+        normalized["priority"] = priority
+        normalized["urgency"] = urgency
+        normalized["is_emergency"] = is_emergency
 
         if not normalized["is_emergency"]:
             normalized["emergency_reason"] = None
@@ -309,9 +518,48 @@ class MultimodalAnalyzer:
         Returns:
             멀티모달 분석 결과 딕셔너리
         """
+        return self.analyze_with_images(
+            audio_text=audio_text,
+            image_sources=[image_source],
+            additional_context=additional_context,
+            audio_file_path=audio_file_path,
+        )
+
+    def analyze_with_images(
+        self,
+        audio_text: str,
+        image_sources: List[Union[str, np.ndarray]],
+        additional_context: Optional[str] = None,
+        audio_file_path: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """
+        오디오 텍스트와 다중 이미지를 함께 분석.
+
+        Args:
+            audio_text: 음성에서 변환된 텍스트
+            image_sources: 이미지 파일 경로/프레임 배열 목록
+            additional_context: 추가 컨텍스트 정보 (선택)
+            audio_file_path: 오디오 파일 경로 (현재 미사용, 인터페이스 호환용)
+
+        Returns:
+            멀티모달 분석 결과 딕셔너리
+        """
+        del audio_file_path  # 향후 확장을 위한 파라미터. 현재 로직에서는 사용하지 않음.
+
         try:
+            valid_sources = [src for src in (image_sources or []) if src is not None]
+            if not valid_sources:
+                return {
+                    'error': '이미지 입력이 없습니다',
+                    'context': '분석 실패',
+                    'urgency': 'LOW',
+                    'is_emergency': False,
+                    'priority': 'LOW'
+                }
+
             # 이미지를 base64로 인코딩
-            base64_image = self.encode_image_to_base64(image_source)
+            base64_images = [self.encode_image_to_base64(src) for src in valid_sources]
+            image_count = len(base64_images)
             
             # 사용자 메시지 구성 (음성 + 특성 + 영상)
             user_message = f"""**1. 음성 입력:**
@@ -328,12 +576,31 @@ class MultimodalAnalyzer:
             
             user_message += """
 **3. 영상:**
-제공된 이미지를 분석하여 위 음성과 음성 특성과 함께 전체 상황을 판단해주세요.
+제공된 이미지들을 시간 흐름으로 함께 분석하여 위 음성과 음성 특성과 함께 전체 상황을 판단해주세요.
 
 **4. 언어 규칙:**
 JSON 키 이름은 그대로 유지하고, 모든 서술형 값은 반드시 한국어로 작성하세요.
 영어 문장으로 답하지 마세요(불가피한 고유명사 제외).
 """
+
+            user_message += f"\n\n**5. 프레임 정보:**\n- 총 입력 프레임 수: {image_count}장"
+
+            user_contents: List[Dict[str, Any]] = [
+                {
+                    "type": "text",
+                    "text": user_message
+                }
+            ]
+            for base64_image in base64_images:
+                user_contents.append(
+                    {
+                        "type": "image_url",
+                        "image_url": {
+                            "url": f"data:image/jpeg;base64,{base64_image}",
+                            "detail": self.image_detail
+                        }
+                    }
+                )
             
             # 메시지 구성
             messages = [
@@ -343,19 +610,7 @@ JSON 키 이름은 그대로 유지하고, 모든 서술형 값은 반드시 한
                 },
                 {
                     "role": "user",
-                    "content": [
-                        {
-                            "type": "text",
-                            "text": user_message
-                        },
-                        {
-                            "type": "image_url",
-                            "image_url": {
-                                "url": f"data:image/jpeg;base64,{base64_image}",
-                                "detail": self.image_detail
-                            }
-                        }
-                    ]
+                    "content": user_contents
                 }
             ]
             

@@ -60,6 +60,10 @@ class ContextLLMService:
             pause_threshold=self.settings.speech.pause_threshold,
             dynamic_threshold=self.settings.speech.dynamic_threshold,
             enable_speech=False,
+            llm_frame_count=self.settings.analysis.llm_frame_count,
+            live_prebuffer_seconds=self.settings.analysis.prebuffer_seconds,
+            live_postbuffer_seconds=self.settings.analysis.postbuffer_seconds,
+            live_max_buffer_seconds=self.settings.analysis.buffer_window_seconds,
         )
 
     @classmethod

@@ -34,7 +34,7 @@ video:
 # 다운샘플링 설정 (성능 최적화)
 # -----------------------------------------------------------
 downsampling:
-  max_image_size: 640             # 최대 이미지 크기 (픽셀) - 작을수록 빠름
+  max_image_size: 480             # 최대 이미지 크기 (픽셀) - 작을수록 빠름
   jpeg_quality: 75                # JPEG 압축 품질 (1-100) - 낮을수록 빠름
   video_fps: 2.0                  # 비디오 분석 FPS
   max_video_frames: 10            # 최대 프레임 수
@@ -46,7 +46,11 @@ downsampling:
 analysis:
   default_text: ""                # 기본 텍스트 입력 (음성 대신)
   iterations: null                # 반복 횟수 (null = 무한)
-  analyze_all_testset: false      # 테스트셋 전체 분석 여부
+  analyze_all_testset: True      # 테스트셋 전체 분석 여부
+  llm_frame_count: 4              # LLM에 전달할 최대 프레임 수
+  prebuffer_seconds: 1.5          # 실시간 프레임 프리버퍼(초)
+  postbuffer_seconds: 0.5         # 실시간 프레임 포스트버퍼(초)
+  buffer_window_seconds: 8.0      # 실시간 프레임 버퍼 보관 길이(초)
   testset_index: 2                # 테스트셋에서 분석할 파일 인덱스
   voice_characteristics: false    # 음성 특성 분석 (피치/에너지) - false로 하면 1-2초 빨라짐
   streaming: false                # 스트리밍 응답 (체감 속도 향상)
@@ -61,7 +65,7 @@ media_test:
   enabled: true
   image_path: "testsets/smile.png"                  # 이미지 파일 경로
   video_path: ""                  # 비디오 파일 경로(mp4 등)
-  audio_path: "testsets/scream_man.mp3"                  # 오디오 파일 경로(mp3/wav 등, 설정 시 video 오디오보다 우선)
+  audio_path: "testsets/scream_man.mp3"            # 오디오 파일 경로(mp3/wav 등, 설정 시 video 오디오보다 우선)
   text_input: ""                  # 오디오 파일에 STT 텍스트가 없을 때 사용할 보조 문장
   phrase_time_limit: 6.0          # audio_path가 비어있을 때 실시간 음성 최대 수집 시간
 
@@ -77,9 +81,10 @@ logging:
 # 디스플레이 설정
 # -----------------------------------------------------------
 display:
-  web_enabled: false              # 웹 대시보드 자동 시작
+  web_enabled: true             # 웹 대시보드 자동 시작
   web_port: 5000                  # 웹 대시보드 포트
   opencv_live: true               # 라이브 모드(webcam, network)에서 OpenCV 창 자동 활성화
+  keep_open_after_run: true       # 배치 분석 종료 후 웹 대시보드 유지
 
 # -----------------------------------------------------------
 # 프롬프트 설정
@@ -95,7 +100,11 @@ prompts:
     1) 음성 텍스트/음성 특성/영상이 서로 일치하면 신뢰도를 높입니다.
     2) 명시적 구조 요청(살려줘, 도와줘, 폭행, 화재, 침입, 총성 등)이 있으면 위험도를 상향합니다.
     3) 영상에 직접 위험 징후(화재, 폭력, 쓰러짐, 출혈, 파손, 침입)가 보이면 우선순위를 상향합니다.
-    4) 증거가 부족하면 과장하지 말고 UNKNOWN 또는 LOW로 응답합니다.
+    4) 망치/도구로 유리창·출입문을 파손하거나 강제 진입 시도 장면은 음성 근거가 약해도 침입 위협으로 간주합니다.
+       - 파손+진입 시도 진행 중이면 최소 HIGH, 인명 위협 가능성이 높으면 CRITICAL로 판단합니다.
+    5) 다음 고위험 관제 시나리오는 보수적으로 낮추지 말고 적극 평가합니다.
+       - 폭력/흉기 위협, 화재/연기/폭발, 의식저하·발작·다량출혈, 교통사고/차량 충돌, 군중 패닉
+    6) 증거가 부족하면 과장하지 말고 UNKNOWN 또는 LOW로 응답합니다.
 
     출력 규칙:
     - markdown/code block 없이 JSON 객체만 반환
@@ -123,8 +132,8 @@ prompts:
     }
 
     우선순위 기준:
-    - CRITICAL: 즉시 인명/중대 사고 위험 (폭력 진행, 화재 진행, 심각한 의료 응급 등)
-    - HIGH: 긴급 대응 필요 (의심 침입, 강한 구조 요청, 명확한 위험 징후)
+    - CRITICAL: 즉시 인명/중대 사고 위험 (폭력 진행, 화재 진행, 강제 침입 진행, 심각한 의료 응급 등)
+    - HIGH: 긴급 대응 필요 (의심 침입, 시설 파손 동반 위협, 강한 구조 요청, 명확한 위험 징후)
     - MEDIUM: 위험 가능성 있으나 즉시성 불명확 (지속 관찰 필요)
     - LOW: 위험 징후 없음 또는 근거 부족
 
@@ -144,12 +153,28 @@ prompts:
     - 화재
     - 폭발
     - 공격
+    - 폭행
+    - 흉기
+    - 칼
+    - 총
+    - 연기
+    - 쓰러짐
+    - 실신
+    - 발작
+    - 교통사고
+    - 충돌
+    - 대피
+    - 패닉
 
 # -----------------------------------------------------------
 # 음성 인식 설정
 # -----------------------------------------------------------
 speech:
   enabled: true                 # 음성 트리거 활성화 여부
+  language: "ko-KR"             # 기본 STT 언어
+  recognition_languages:        # 파일/비디오 STT 언어 후보 (순서대로 시도)
+    - "ko-KR"
+    - "en-US"
   energy_threshold: 300           # 음성 감지 에너지 임계값 (낮을수록 민감, 기본값: 400)
   pause_threshold: 0.8            # 문장 끝 판단 침묵 시간 (초, 기본값: 3.0)
   dynamic_threshold: false        # 동적 에너지 임계값 (false=고정/스피커용, true=자동/마이크용)

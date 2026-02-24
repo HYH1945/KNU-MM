@@ -54,3 +54,29 @@ def test_iterations_none_and_invalid_value_handling():
 
     settings_invalid = build_settings({"analysis": {"iterations": "not_a_number"}})
     assert settings_invalid.analysis.iterations == 0
+
+
+def test_live_buffer_settings_parse_optional_float_values():
+    settings = build_settings(
+        {
+            "analysis": {
+                "prebuffer_seconds": "1.2",
+                "postbuffer_seconds": 0.35,
+                "buffer_window_seconds": "9.0",
+            }
+        }
+    )
+    assert settings.analysis.prebuffer_seconds == 1.2
+    assert settings.analysis.postbuffer_seconds == 0.35
+    assert settings.analysis.buffer_window_seconds == 9.0
+
+    settings_invalid = build_settings(
+        {
+            "analysis": {
+                "prebuffer_seconds": "bad-value",
+                "postbuffer_seconds": None,
+            }
+        }
+    )
+    assert settings_invalid.analysis.prebuffer_seconds is None
+    assert settings_invalid.analysis.postbuffer_seconds is None

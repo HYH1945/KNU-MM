@@ -19,6 +19,7 @@ import json
 import logging
 import shutil
 import subprocess
+from collections import deque
 import cv2
 import numpy as np
 import threading
@@ -26,7 +27,7 @@ import queue
 import time
 from datetime import datetime
 from pathlib import Path
-from typing import Optional, Dict, Any, List, Tuple, Callable
+from typing import Optional, Dict, Any, Deque, List, Tuple, Callable
 from dataclasses import dataclass
 
 logger = logging.getLogger(__name__)
@@ -938,13 +939,20 @@ class VideoCaptureManager:
 class SpeechDetector:
     """음성 감지 및 인식"""
     
-    def __init__(self, energy_threshold: int = 400, pause_threshold: float = 3.0, dynamic_threshold: bool = False):
+    def __init__(
+        self,
+        energy_threshold: int = 400,
+        pause_threshold: float = 3.0,
+        dynamic_threshold: bool = False,
+        recognition_languages: Optional[List[str]] = None,
+    ):
         """
         Args:
             energy_threshold: 음성 감지 에너지 임계값 (낮을수록 민감함) - 기본값 400
             pause_threshold: 문장 끝 판단 대기 시간 (초) - 기본값 3.0 (자연스러운 대화 흐름)
                            3초 침묵 후 문장 끝으로 판단 → 자연스러운 대화 포함
             dynamic_threshold: 동적 에너지 임계값 조정 여부 - False=고정(스피커 소리용), True=자동(실시간 조정)
+            recognition_languages: STT 언어 후보 목록 (순서대로 fallback)
         """
         if not SPEECH_RECOGNITION_AVAILABLE:
             raise ImportError("speech_recognition이 필요합니다: pip install SpeechRecognition")
@@ -968,8 +976,73 @@ class SpeechDetector:
         # 백그라운드 음성 인식용 저장소
         self._bg_audio_queue = None
         self._is_listening = False
+        self.recognition_languages = self._normalize_languages(recognition_languages)
+
+    @staticmethod
+    def _normalize_languages(recognition_languages: Optional[List[str]]) -> List[str]:
+        """STT 언어 후보를 정규화하고 기본값을 보강."""
+        normalized: List[str] = []
+        seen = set()
+        for item in recognition_languages or []:
+            code = str(item).strip()
+            if not code or code in seen:
+                continue
+            seen.add(code)
+            normalized.append(code)
+
+        for default_code in ("ko-KR", "en-US"):
+            if default_code not in seen:
+                normalized.append(default_code)
+                seen.add(default_code)
+
+        return normalized
+
+    def _resolve_languages(self, language: Optional[str] = None) -> List[str]:
+        """호출 시 지정 언어 + 기본 후보 목록을 합쳐 우선순위 리스트 구성."""
+        candidates: List[str] = []
+        if language:
+            candidates.append(str(language).strip())
+        candidates.extend(self.recognition_languages)
+
+        deduped: List[str] = []
+        seen = set()
+        for code in candidates:
+            if not code or code in seen:
+                continue
+            seen.add(code)
+            deduped.append(code)
+        return deduped
+
+    def _recognize_audio_with_fallback(
+        self,
+        audio: Any,
+        language: Optional[str] = None,
+    ) -> Tuple[Optional[str], bool]:
+        """
+        언어 후보를 순차 시도하여 텍스트를 인식.
+        Returns:
+            (text, request_error_occurred)
+        """
+        request_error_occurred = False
+        for lang in self._resolve_languages(language):
+            try:
+                text = self.recognizer.recognize_google(audio, language=lang)
+                if text:
+                    return text, request_error_occurred
+            except sr.UnknownValueError:
+                continue
+            except sr.RequestError as e:
+                logger.warning("Speech recognition request failed (lang=%s): %s", lang, e)
+                request_error_occurred = True
+                continue
+        return None, request_error_occurred
     
-    def listen_and_recognize(self, timeout: float = None, phrase_time_limit: float = None, language: str = "ko-KR") -> Tuple[Optional[str], Optional[Any]]:
+    def listen_and_recognize(
+        self,
+        timeout: float = None,
+        phrase_time_limit: float = None,
+        language: Optional[str] = None,
+    ) -> Tuple[Optional[str], Optional[Any]]:
         """
         음성을 듣고 바로 인식 (감지 + 인식 통합)
         pause_threshold 내에서 수집한 모든 음성을 인식
@@ -1001,16 +1074,14 @@ class SpeechDetector:
                 if duration < 0.3:  # 0.5초 → 0.3초로 완화
                     return None, None
                 
-                # 바로 텍스트 인식
-                try:
-                    text = self.recognizer.recognize_google(audio, language=language)
+                # 바로 텍스트 인식 (다국어 fallback)
+                text, request_error_occurred = self._recognize_audio_with_fallback(audio, language)
+                if text:
                     return text, audio
-                except sr.UnknownValueError:
-                    # 음성/소리는 감지됐으나 텍스트 인식 불가 -> 비음성 이벤트 검출을 위해 오디오 반환
-                    return None, audio
-                except sr.RequestError as e:
-                    logger.warning("Speech recognition request failed: %s", e)
+                if request_error_occurred:
                     return None, None
+                # 음성/소리는 감지됐으나 텍스트 인식 불가 -> 비음성 이벤트 검출을 위해 오디오 반환
+                return None, audio
         
         except sr.WaitTimeoutError:
             return None, None
@@ -1018,7 +1089,7 @@ class SpeechDetector:
             logger.debug("listen_and_recognize failed: %s", e)
             return None, None
     
-    def start_background_listening(self, language: str = "ko-KR"):
+    def start_background_listening(self, language: Optional[str] = None):
         """
         백그라운드에서 계속 음성을 감지하고 인식
         루프가 멈추지 않고 음성이 감지되면 큐에 추가
@@ -1051,17 +1122,15 @@ class SpeechDetector:
                         if duration < 0.5:  # 0.5초 이상만 인식 시도
                             continue
                         
-                        # 텍스트 인식
-                        try:
-                            text = self.recognizer.recognize_google(audio, language=language)
+                        # 텍스트 인식 (다국어 fallback)
+                        text, request_error_occurred = self._recognize_audio_with_fallback(audio, language)
+                        if text:
                             print(f'\n음성 인식됨: "{text}"')
                             # 큐에 추가 (메인 루프에서 꺼낼 수 있음)
                             self._bg_audio_queue.put((text, audio))
-                        except sr.UnknownValueError:
+                        elif not request_error_occurred:
                             # 비음성/짧은 발화도 사운드 이벤트 감지 경로로 전달
                             self._bg_audio_queue.put((None, audio))
-                        except sr.RequestError as e:
-                            logger.warning("Background speech recognition request failed: %s", e)
                 
                 except Exception as e:
                     logger.debug("Background speech worker error: %s", e)
@@ -1089,7 +1158,11 @@ class SpeechDetector:
         """백그라운드 리스닝 중지"""
         self._is_listening = False
     
-    def listen_continuous(self, duration: float = 5.0, language: str = "ko-KR") -> Tuple[Optional[str], Optional[Any]]:
+    def listen_continuous(
+        self,
+        duration: float = 5.0,
+        language: Optional[str] = None,
+    ) -> Tuple[Optional[str], Optional[Any]]:
         """
         지정된 시간(초) 동안 연속으로 음성을 수집하고 인식
         여러 문장을 한번에 모아서 대화 맥락을 파악할 수 있음
@@ -1117,15 +1190,13 @@ class SpeechDetector:
                 if duration_actual < 0.5:  # 0.5초 미만이면 무시
                     return None, None
                 
-                # 텍스트 인식
-                try:
-                    text = self.recognizer.recognize_google(audio, language=language)
+                # 텍스트 인식 (다국어 fallback)
+                text, request_error_occurred = self._recognize_audio_with_fallback(audio, language)
+                if text:
                     return text, audio
-                except sr.UnknownValueError:
+                if request_error_occurred:
                     return None, None
-                except sr.RequestError as e:
-                    logger.warning("Continuous speech recognition request failed: %s", e)
-                    return None, None
+                return None, None
         
         except sr.WaitTimeoutError:
             return None, None
@@ -1133,7 +1204,7 @@ class SpeechDetector:
             logger.debug("listen_continuous failed: %s", e)
             return None, None
     
-    def recognize_speech(self, audio: Any, language: str = "ko-KR") -> Optional[str]:
+    def recognize_speech(self, audio: Any, language: Optional[str] = None) -> Optional[str]:
         """
         음성을 텍스트로 변환 (Google Speech Recognition)
         
@@ -1144,14 +1215,8 @@ class SpeechDetector:
         Returns:
             인식된 텍스트 또는 None
         """
-        try:
-            text = self.recognizer.recognize_google(audio, language=language)
-            return text
-        except sr.UnknownValueError:
-            return None
-        except sr.RequestError as e:
-            logger.warning("Speech recognition request failed: %s", e)
-            return None
+        text, _ = self._recognize_audio_with_fallback(audio, language)
+        return text
     
     def save_audio_to_wav(self, audio: Any, output_path: str) -> str:
         """
@@ -1185,6 +1250,10 @@ class IntegratedMultimodalSystem:
         pause_threshold: float = 3.0,
         dynamic_threshold: bool = False,
         enable_speech: bool = True,
+        llm_frame_count: Optional[int] = None,
+        live_prebuffer_seconds: Optional[float] = None,
+        live_postbuffer_seconds: Optional[float] = None,
+        live_max_buffer_seconds: Optional[float] = None,
     ):
         """
         통합 멀티모달 시스템 초기화
@@ -1198,6 +1267,10 @@ class IntegratedMultimodalSystem:
             pause_threshold: 문장 끝 침묵 판단 시간 (초)
             dynamic_threshold: 동적 에너지 임계값 여부 (False=고정/스피커소리용, True=자동/마이크용)
             enable_speech: 음성 감지기 초기화 여부 (False면 영상 전용 모드)
+            llm_frame_count: LLM에 전달할 최대 프레임 수 (None이면 config.analysis.llm_frame_count 사용)
+            live_prebuffer_seconds: 실시간 모드 프리버퍼 길이(초). None이면 자동 계산
+            live_postbuffer_seconds: 실시간 모드 포스트버퍼 길이(초). None이면 자동 계산
+            live_max_buffer_seconds: 실시간 버퍼 최대 보관 시간(초). None이면 자동 계산
         """
         self.camera_id = camera_id
         self.model = model
@@ -1205,11 +1278,22 @@ class IntegratedMultimodalSystem:
         
         # 분석 설정 로드
         self.analysis_config = get_config('analysis', default={}) or {}
+        self.speech_config = get_config('speech', default={}) or {}
         self.voice_analysis_config = get_config('voice_analysis', default={}) or {}
         self.voice_characteristics_config = get_config('voice_characteristics', default={}) or {}
         self.streaming_config = get_config('streaming', default={}) or {}
         self.use_voice_characteristics, self.use_streaming = self._resolve_feature_toggles()
         self.voice_thresholds = self._resolve_voice_threshold_config()
+        self.llm_frame_count = self._resolve_llm_frame_count(llm_frame_count)
+        self.live_prebuffer_seconds = self._resolve_optional_live_window_seconds(
+            live_prebuffer_seconds, "prebuffer_seconds"
+        )
+        self.live_postbuffer_seconds = self._resolve_optional_live_window_seconds(
+            live_postbuffer_seconds, "postbuffer_seconds"
+        )
+        self.live_max_buffer_seconds = self._resolve_optional_live_window_seconds(
+            live_max_buffer_seconds, "buffer_window_seconds"
+        )
         self.sound_event_config = get_config('sound_event', default={}) or {}
         self.use_sound_event_detection = self.sound_event_config.get('enabled', True)
         
@@ -1314,6 +1398,65 @@ class IntegratedMultimodalSystem:
             logger.warning("Config mismatch: both `voice_analysis` and `analysis.voice_analysis` found. Using `voice_analysis`.")
         return self.voice_analysis_config or legacy_voice_cfg
 
+    def _resolve_llm_frame_count(self, llm_frame_count: Optional[int]) -> int:
+        """LLM에 전달할 프레임 수 설정을 안전하게 정규화."""
+        raw_value = llm_frame_count
+        if raw_value is None:
+            raw_value = self.analysis_config.get("llm_frame_count", 4)
+        try:
+            value = int(raw_value)
+        except (TypeError, ValueError):
+            value = 4
+        return max(1, value)
+
+    def _resolve_optional_live_window_seconds(
+        self,
+        value: Optional[float],
+        config_key: str,
+    ) -> Optional[float]:
+        """실시간 프레임 윈도우 관련 설정(초)을 정규화."""
+        raw_value = value
+        if raw_value is None:
+            raw_value = self.analysis_config.get(config_key)
+        if raw_value is None:
+            return None
+        try:
+            parsed = float(raw_value)
+        except (TypeError, ValueError):
+            logger.warning("Invalid analysis.%s value=%r. Fallback to auto.", config_key, raw_value)
+            return None
+        return max(0.0, parsed)
+
+    def _resolve_stt_languages(self, language: Optional[str] = None) -> List[str]:
+        """STT 인식 언어 후보 목록(우선순위 포함) 구성."""
+        candidates: List[str] = []
+
+        if language:
+            candidates.append(str(language).strip())
+
+        config_languages = self.speech_config.get("recognition_languages")
+        if isinstance(config_languages, (list, tuple)):
+            candidates.extend(str(item).strip() for item in config_languages if str(item).strip())
+        elif isinstance(config_languages, str):
+            candidates.extend(part.strip() for part in config_languages.split(",") if part.strip())
+
+        config_language = self.speech_config.get("language")
+        if config_language:
+            candidates.append(str(config_language).strip())
+
+        # 다국어 fallback 기본값 (한국어 우선 + 영어)
+        candidates.extend(["ko-KR", "en-US"])
+
+        deduped: List[str] = []
+        seen = set()
+        for code in candidates:
+            if not code or code in seen:
+                continue
+            seen.add(code)
+            deduped.append(code)
+
+        return deduped
+
     def _init_speech_detector(
         self,
         energy_threshold: int,
@@ -1330,10 +1473,12 @@ class IntegratedMultimodalSystem:
             return None
 
         try:
+            recognition_languages = self._resolve_stt_languages()
             return SpeechDetector(
                 energy_threshold=energy_threshold,
                 pause_threshold=pause_threshold,
                 dynamic_threshold=dynamic_threshold,
+                recognition_languages=recognition_languages,
             )
         except Exception as e:
             logger.warning("SpeechDetector initialization failed: %s", e)
@@ -1509,6 +1654,8 @@ class IntegratedMultimodalSystem:
                     transcribed_from_file = self._transcribe_audio_file(str(extracted_video_audio_path))
                     if transcribed_from_file:
                         print(f'음성 인식됨: "{transcribed_from_file}"')
+                    else:
+                        print("⚠️  STT 인식 실패 - speech.recognition_languages 설정을 확인하세요.")
                     if sound_event and sound_event.get("top_event"):
                         print(
                             "🔊 비음성(YAMNet): %s (%.2f)"
@@ -1561,15 +1708,15 @@ class IntegratedMultimodalSystem:
 
             # 이미지 다운샘플링 적용
             frames = [self.downsampler.downsample_image(f) for f in frames]
+            llm_frames = self._select_llm_frames(frames)
             result["video_analysis"] = {
                 "frame_count": len(frames),
+                "llm_frame_count": len(llm_frames),
                 "timestamps": timestamps,
             }
 
             # 3. 멀티모달 분석 (영상 + 텍스트 입력)
-            if self.multimodal_analyzer and frames:
-                representative_frame = frames[len(frames) // 2]
-
+            if self.multimodal_analyzer and llm_frames:
                 default_text = "현재 상황을 분석해 주세요. 위험하거나 긴급한 상황인지 판단해 주세요."
                 if is_audio_source:
                     sound_hint = ""
@@ -1604,10 +1751,9 @@ class IntegratedMultimodalSystem:
                         "[테스트 모드] 실제 음성 입력 없이 영상만 분석. 영상에서 보이는 상황을 객관적으로 분석하세요."
                     )
                 additional_context = "\n\n".join(additional_context_parts)
-
-                multimodal_result = self.multimodal_analyzer.analyze_with_image(
-                    audio_text=analysis_text,
-                    image_source=representative_frame,
+                multimodal_result = self._analyze_frames_with_llm(
+                    analysis_text=analysis_text,
+                    llm_frames=llm_frames,
                     additional_context=additional_context,
                 )
 
@@ -1734,16 +1880,28 @@ class IntegratedMultimodalSystem:
             pass
         return None
 
-    def _transcribe_audio_file(self, audio_file_path: str, language: str = "ko-KR") -> Optional[str]:
-        """파일 오디오를 STT로 텍스트 변환(가능한 경우에만)."""
+    def _transcribe_audio_file(self, audio_file_path: str, language: Optional[str] = None) -> Optional[str]:
+        """파일 오디오를 STT로 텍스트 변환(다국어 fallback 지원)."""
         if not audio_file_path or not SPEECH_RECOGNITION_AVAILABLE:
             return None
         try:
             recognizer = sr.Recognizer()
             with sr.AudioFile(audio_file_path) as source:
                 audio = recognizer.record(source)
-            return recognizer.recognize_google(audio, language=language)
-        except sr.UnknownValueError:
+            languages = self._resolve_stt_languages(language)
+
+            for lang in languages:
+                try:
+                    text = recognizer.recognize_google(audio, language=lang)
+                    if text:
+                        return text
+                except sr.UnknownValueError:
+                    continue
+                except sr.RequestError as e:
+                    logger.warning("Audio-file speech recognition request failed (lang=%s): %s", lang, e)
+                    continue
+
+            logger.debug("Audio-file STT failed for all candidate languages: %s", languages)
             return None
         except sr.RequestError as e:
             logger.warning("Audio-file speech recognition request failed: %s", e)
@@ -1863,6 +2021,8 @@ class IntegratedMultimodalSystem:
                     transcribed_text = self._transcribe_audio_file(str(extracted_video_audio_path))
                     if transcribed_text:
                         print(f'음성 인식됨: "{transcribed_text}"')
+                    else:
+                        print("⚠️  STT 인식 실패 - speech.recognition_languages 설정을 확인하세요.")
                     trigger_source = "video_audio"
                     if not transcribed_text and fallback_text:
                         transcribed_text = fallback_text
@@ -2041,15 +2201,23 @@ class IntegratedMultimodalSystem:
                 top_conf = (sound_event or {}).get("top_confidence", 0.0)
                 print(f"🔊 비음성 이벤트 감지: {top_event} ({top_conf:.2f})")
             print("📸 영상 캡처 중...")
-            
-            # 현재 프레임 캡처 (이미지 1장)
-            frame = self.video_manager.capture_frame()
-            if frame is not None:
-                frame = self.downsampler.downsample_image(frame)
-                video_frames = [frame]
-                result["video_analysis"] = {"frame_count": 1}
-            else:
-                video_frames = []
+
+            # 트리거 시점 주변 비디오 세그먼트 캡처 후 다중 프레임 분석
+            video_frames, timestamps = self._capture_and_process_video()
+            if not video_frames:
+                frame = self.video_manager.capture_frame()
+                if frame is not None:
+                    video_frames = [self.downsampler.downsample_image(frame)]
+                    timestamps = [0.0]
+                else:
+                    timestamps = []
+
+            llm_frames = self._select_llm_frames(video_frames)
+            result["video_analysis"] = {
+                "frame_count": len(video_frames),
+                "llm_frame_count": len(llm_frames),
+                "timestamps": timestamps,
+            }
             
             # 4. 음성 특성 분석 (병렬 처리 가능)
             audio_path = None
@@ -2071,11 +2239,9 @@ class IntegratedMultimodalSystem:
                 result["voice_characteristics"] = voice_features
             
             # 5. 멀티모달 분석 (음성 텍스트 + 영상)
-            if video_frames and self.multimodal_analyzer:
+            if llm_frames and self.multimodal_analyzer:
                 print("🔍 멀티모달 분석 중...")
-                
-                representative_frame = video_frames[0]
-                
+
                 # 음성 특성 정보를 추가 컨텍스트로 전달
                 additional_context_parts = []
                 if voice_features:
@@ -2086,14 +2252,15 @@ class IntegratedMultimodalSystem:
 
                 analysis_text = transcribed_text if transcribed_text else "[음성 텍스트 없음] 비음성 위험 소리가 감지되었습니다."
                 
-                multimodal_result = self.multimodal_analyzer.analyze_with_image(
-                    audio_text=analysis_text,
-                    image_source=representative_frame,
+                multimodal_result = self._analyze_frames_with_llm(
+                    analysis_text=analysis_text,
+                    llm_frames=llm_frames,
                     additional_context=additional_context,
-                    audio_file_path=str(audio_path) if audio_path else None
+                    audio_file_path=str(audio_path) if audio_path else None,
                 )
                 
                 result["multimodal_analysis"] = multimodal_result
+                result["_frame"] = llm_frames[0]
             
             # 6. 성공 표시
             result["success"] = True
@@ -2217,6 +2384,144 @@ class IntegratedMultimodalSystem:
         frames, timestamps = self.downsampler.downsample_video_frames(frames, timestamps)
         
         return frames, timestamps
+
+    def _prepare_live_frame_for_analysis(self, frame: Optional[np.ndarray]) -> Optional[np.ndarray]:
+        """라이브 프레임을 분석 파이프라인용 크기로 정규화."""
+        if frame is None:
+            return None
+
+        scale = float(self.downsampling_config.video_resolution_scale or 1.0)
+        if scale < 1.0:
+            new_width = max(1, int(frame.shape[1] * scale))
+            new_height = max(1, int(frame.shape[0] * scale))
+            frame = cv2.resize(frame, (new_width, new_height), interpolation=cv2.INTER_AREA)
+
+        return self.downsampler.downsample_image(frame)
+
+    @staticmethod
+    def _estimate_audio_duration(audio: Any) -> float:
+        """SpeechRecognition AudioData 기준 오디오 길이(초) 추정."""
+        if audio is None:
+            return 0.0
+
+        try:
+            raw_data = audio.get_raw_data()
+            sample_rate = float(getattr(audio, "sample_rate", 0) or 0)
+            sample_width = float(getattr(audio, "sample_width", 0) or 0)
+            if sample_rate <= 0 or sample_width <= 0:
+                return 0.0
+            return max(0.0, len(raw_data) / (sample_rate * sample_width))
+        except Exception:
+            return 0.0
+
+    @staticmethod
+    def _trim_frame_buffer(frame_buffer: Deque[Tuple[float, np.ndarray]], cutoff_time: float) -> None:
+        """버퍼에서 cutoff 이전 프레임 제거."""
+        while frame_buffer and frame_buffer[0][0] < cutoff_time:
+            frame_buffer.popleft()
+
+    def _limit_frames_with_timestamps(
+        self,
+        frames: List[np.ndarray],
+        timestamps: List[float],
+    ) -> Tuple[List[np.ndarray], List[float]]:
+        """max_video_frames에 맞춰 프레임/타임스탬프를 균등 축소."""
+        if not frames:
+            return [], []
+
+        max_frames = max(1, int(self.downsampling_config.max_video_frames))
+        if len(frames) <= max_frames:
+            return frames, timestamps
+
+        indices = np.linspace(0, len(frames) - 1, num=max_frames, dtype=int)
+        return [frames[i] for i in indices], [timestamps[i] for i in indices]
+
+    def _collect_trigger_aligned_frames(
+        self,
+        frame_buffer: Deque[Tuple[float, np.ndarray]],
+        audio: Any,
+        trigger_time: float,
+        sample_interval: float,
+        prebuffer_seconds: float,
+        postbuffer_seconds: float,
+        max_buffer_seconds: float,
+    ) -> Tuple[List[np.ndarray], List[float]]:
+        """
+        프리버퍼 + 발화 구간 + 짧은 포스트버퍼를 기준으로 프레임 수집.
+        - 발화 시작 시점은 (트리거 시각 - 오디오 길이)로 근사한다.
+        """
+        audio_duration = self._estimate_audio_duration(audio)
+        speech_start_time = max(0.0, trigger_time - audio_duration)
+        window_start = max(0.0, speech_start_time - max(0.0, prebuffer_seconds))
+        window_end = trigger_time + max(0.0, postbuffer_seconds)
+
+        next_capture_time = trigger_time
+        while time.time() < window_end:
+            now = time.time()
+            if now >= next_capture_time:
+                frame = self.video_manager.capture_frame()
+                prepared = self._prepare_live_frame_for_analysis(frame)
+                if prepared is not None:
+                    frame_buffer.append((now, prepared))
+                    self._trim_frame_buffer(frame_buffer, now - max_buffer_seconds)
+                next_capture_time = now + sample_interval
+            time.sleep(0.005)
+
+        selected = [(ts, frame) for ts, frame in frame_buffer if window_start <= ts <= window_end]
+        if not selected and frame_buffer:
+            selected = [frame_buffer[-1]]
+            window_start = selected[0][0]
+
+        frames = [frame for _, frame in selected]
+        timestamps = [max(0.0, ts - window_start) for ts, _ in selected]
+        return self._limit_frames_with_timestamps(frames, timestamps)
+
+    def _select_llm_frames(self, frames: List[np.ndarray]) -> List[np.ndarray]:
+        """LLM 입력용으로 프레임을 균등 샘플링."""
+        if not frames:
+            return []
+
+        target_count = min(len(frames), self.llm_frame_count)
+        if target_count == len(frames):
+            return frames
+
+        indices = np.linspace(0, len(frames) - 1, num=target_count, dtype=int)
+        return [frames[i] for i in indices]
+
+    def _analyze_frames_with_llm(
+        self,
+        analysis_text: str,
+        llm_frames: List[np.ndarray],
+        additional_context: Optional[str] = None,
+        audio_file_path: Optional[str] = None,
+    ) -> Optional[Dict[str, Any]]:
+        """멀티프레임 분석 지원 (analyze_with_images 우선, 없으면 1프레임 폴백)."""
+        if not self.multimodal_analyzer or not llm_frames:
+            return None
+
+        if len(llm_frames) == 1:
+            return self.multimodal_analyzer.analyze_with_image(
+                audio_text=analysis_text,
+                image_source=llm_frames[0],
+                additional_context=additional_context,
+                audio_file_path=audio_file_path,
+            )
+
+        if hasattr(self.multimodal_analyzer, "analyze_with_images"):
+            return self.multimodal_analyzer.analyze_with_images(
+                audio_text=analysis_text,
+                image_sources=llm_frames,
+                additional_context=additional_context,
+                audio_file_path=audio_file_path,
+            )
+
+        logger.warning("Multimodal analyzer has no multi-image API; fallback to first frame.")
+        return self.multimodal_analyzer.analyze_with_image(
+            audio_text=analysis_text,
+            image_source=llm_frames[0],
+            additional_context=additional_context,
+            audio_file_path=audio_file_path,
+        )
 
     def _analyze_sound_event(self, audio: Any) -> Optional[Dict[str, Any]]:
         """YAMNet 기반 비음성 이벤트 분석"""
@@ -2391,9 +2696,39 @@ class IntegratedMultimodalSystem:
         """순차 모니터링: 백그라운드 음성 감지 방식"""
         print("\n🔄 모니터링 시작 (Ctrl+C로 종료)")
         print("   💡 백그라운드 음성 감지 중... 아무거나 말씀하세요!")
-        
+
         iteration = 0
-        
+        capture_fps = max(0.5, float(self.downsampling_config.video_fps or 2.0))
+        sample_interval = 1.0 / capture_fps
+        default_prebuffer_seconds = max(0.6, min(1.5, sample_interval * 3.0))
+        default_postbuffer_seconds = max(0.25, sample_interval)
+        prebuffer_seconds = (
+            self.live_prebuffer_seconds
+            if self.live_prebuffer_seconds is not None
+            else default_prebuffer_seconds
+        )
+        postbuffer_seconds = (
+            self.live_postbuffer_seconds
+            if self.live_postbuffer_seconds is not None
+            else default_postbuffer_seconds
+        )
+        default_max_buffer_seconds = max(8.0, prebuffer_seconds + 6.0)
+        max_buffer_seconds = (
+            self.live_max_buffer_seconds
+            if self.live_max_buffer_seconds is not None
+            else default_max_buffer_seconds
+        )
+        min_buffer_seconds = prebuffer_seconds + postbuffer_seconds + sample_interval
+        if max_buffer_seconds < min_buffer_seconds:
+            logger.warning(
+                "analysis.buffer_window_seconds(%.2f) is too small for pre/post window; adjusted to %.2f.",
+                max_buffer_seconds,
+                min_buffer_seconds,
+            )
+            max_buffer_seconds = min_buffer_seconds
+        frame_buffer: Deque[Tuple[float, np.ndarray]] = deque()
+        next_frame_capture_time = time.time()
+
         # 백그라운드 음성 감지 시작
         if not self.speech_detector:
             print("❌ 음성 감지기가 비활성화되어 모니터링을 진행할 수 없습니다.")
@@ -2406,7 +2741,16 @@ class IntegratedMultimodalSystem:
                 if max_iterations and iteration >= max_iterations:
                     print(f"\n✅ {max_iterations}회 분석 완료!")
                     break
-                
+
+                now = time.time()
+                if now >= next_frame_capture_time:
+                    frame = self.video_manager.capture_frame()
+                    prepared = self._prepare_live_frame_for_analysis(frame)
+                    if prepared is not None:
+                        frame_buffer.append((now, prepared))
+                        self._trim_frame_buffer(frame_buffer, now - max_buffer_seconds)
+                    next_frame_capture_time = now + sample_interval
+
                 # 비블로킹 - 감지된 음성이 있는지 확인
                 transcribed_text, audio = self.speech_detector.get_recognized_speech()
 
@@ -2428,15 +2772,39 @@ class IntegratedMultimodalSystem:
                         print("비음성(YAMNet): N/A")
 
                     print("📸 영상 캡처 중...")
-                    
-                    # 현재 프레임 캡처
-                    frame = self.video_manager.capture_frame()
-                    if frame is not None:
-                        frame = self.downsampler.downsample_image(frame)
-                    
+
+                    # 트리거 시점 기준 프리버퍼 + 발화 구간 프레임 추출
+                    trigger_time = time.time()
+                    video_frames, timestamps = self._collect_trigger_aligned_frames(
+                        frame_buffer=frame_buffer,
+                        audio=audio,
+                        trigger_time=trigger_time,
+                        sample_interval=sample_interval,
+                        prebuffer_seconds=prebuffer_seconds,
+                        postbuffer_seconds=postbuffer_seconds,
+                        max_buffer_seconds=max_buffer_seconds,
+                    )
+                    if not video_frames:
+                        frame = self.video_manager.capture_frame()
+                        prepared = self._prepare_live_frame_for_analysis(frame)
+                        if prepared is not None:
+                            video_frames = [prepared]
+                            timestamps = [0.0]
+                        else:
+                            timestamps = []
+
                     # 분석 수행
-                    result = self._analyze_with_data(transcribed_text, audio, frame, sound_event=sound_event, trigger_source=trigger_source)
-                    
+                    result = self._analyze_with_data(
+                        transcribed_text,
+                        audio,
+                        frame=video_frames[0] if video_frames else None,
+                        frames=video_frames,
+                        sound_event=sound_event,
+                        trigger_source=trigger_source,
+                    )
+                    if result.get("video_analysis"):
+                        result["video_analysis"]["timestamps"] = timestamps
+
                     # 분석 결과 처리
                     if result.get("success"):
                         iteration += 1
@@ -2469,7 +2837,8 @@ class IntegratedMultimodalSystem:
         self,
         transcribed_text: Optional[str],
         audio: Any,
-        frame: np.ndarray,
+        frame: Optional[np.ndarray],
+        frames: Optional[List[np.ndarray]] = None,
         sound_event: Optional[Dict[str, Any]] = None,
         trigger_source: Optional[str] = None,
     ) -> Dict[str, Any]:
@@ -2488,8 +2857,14 @@ class IntegratedMultimodalSystem:
         }
         
         try:
-            video_frames = [frame] if frame is not None else []
-            result["video_analysis"] = {"frame_count": len(video_frames)}
+            video_frames = [f for f in (frames or []) if f is not None]
+            if not video_frames and frame is not None:
+                video_frames = [frame]
+            llm_frames = self._select_llm_frames(video_frames)
+            result["video_analysis"] = {
+                "frame_count": len(video_frames),
+                "llm_frame_count": len(llm_frames),
+            }
             
             # 음성 특성 분석
             audio_path = None
@@ -2519,14 +2894,15 @@ class IntegratedMultimodalSystem:
                 else:
                     print("⚠️  음성 특성 분석기 비활성화")
             else:
-                print("⚠️  오디오 데이터 없음")
+                if transcribed_text:
+                    print("ℹ️  파일 기반 텍스트 입력 사용 (실시간 AudioData 없음)")
+                else:
+                    print("⚠️  오디오 데이터 없음")
             
             # 멀티모달 분석
-            if video_frames and self.multimodal_analyzer:
+            if llm_frames and self.multimodal_analyzer:
                 print("🔍 멀티모달 분석 중...")
-                
-                representative_frame = video_frames[0]
-                
+
                 additional_context_parts = []
                 if voice_features:
                     additional_context_parts.append(self._format_voice_features_context(voice_features))
@@ -2535,15 +2911,16 @@ class IntegratedMultimodalSystem:
                 additional_context = "\n\n".join([ctx for ctx in additional_context_parts if ctx]) if additional_context_parts else None
 
                 analysis_text = transcribed_text if transcribed_text else "[음성 텍스트 없음] 비음성 위험 소리가 감지되었습니다."
-                
-                multimodal_result = self.multimodal_analyzer.analyze_with_image(
-                    audio_text=analysis_text,
-                    image_source=representative_frame,
+
+                multimodal_result = self._analyze_frames_with_llm(
+                    analysis_text=analysis_text,
+                    llm_frames=llm_frames,
                     additional_context=additional_context,
-                    audio_file_path=str(audio_path) if audio_path else None
+                    audio_file_path=str(audio_path) if audio_path else None,
                 )
                 
                 result["multimodal_analysis"] = multimodal_result
+                result["_frame"] = llm_frames[0]
             
             result["success"] = True
             
