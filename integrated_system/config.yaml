@@ -69,8 +69,14 @@ stt:
 # -----------------------------------------------------------
 server:
   enabled: true
-  url: "http://localhost:8000/event"                           # 대시보드 서버 URL (예: https://xxx.ngrok-free.dev/publish)
-  timeout: 2.0                      # HTTP 전송 타임아웃 (초)
+  url: "http://localhost:8100/event"       # 대시보드 서버 URL
+  timeout: 2.0                             # HTTP 전송 타임아웃 (초)
+  event_dashboard_port: 8100               # 이벤트 대시보드 포트
+  contextllm_dashboard_port: 5100          # ContextLLM 대시보드 포트
+  auto_start_dashboard: true               # 이벤트 대시보드 자동 시작
+  dashboard_script: "integrated_system/modules/dashboard_server.py"
+  auto_start_contextllm_dashboard: false   # ContextLLM 대시보드 자동 시작
+  contextllm_dashboard_script: "contextllm/src/web/app.py"
 
 # -----------------------------------------------------------
 # 파이프라인 설정
