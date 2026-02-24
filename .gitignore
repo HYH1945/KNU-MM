@@ -13,6 +13,8 @@ Desktop.ini
 __pycache__/
 *.py[cod]
 *$py.class
+*.pyo
+*.pyd
 *.so
 .Python
 build/
@@ -32,14 +34,27 @@ share/python-wheels/
 .installed.cfg
 *.egg
 MANIFEST
-*.pyo
-*.pyd
 
 # ─── 가상환경 ───
 .venv/
 venv/
 env/
 ENV/
+
+# ─── Tooling caches ───
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.cache/
+.coverage
+htmlcov/
+.tox/
+
+# ─── 로그 / 데이터 ───
+*.log
+data/logs/
+contextllm/data/logs/
+transcriptions/
 
 # ─── IDE / 에디터 ───
 .vscode/
@@ -66,17 +81,17 @@ config/*.pem
 contextllm/config/config.yaml
 !contextllm/config/config.yaml.example
 
-# ─── YOLO 모델 파일 (용량 큼) ───
+# ─── ML 아티팩트 / 결과물 ───
+runs/
+outputs/
+datasets/
+data/
 *.pt
 *.onnx
 *.engine
+*.trt
 *.tflite
-
-# ─── 로그 / 데이터 ───
-*.log
-data/logs/
-contextllm/data/logs/
-transcriptions/
+*.weights
 
 # ─── 녹음 / 미디어 파일 ───
 recording.wav
@@ -86,18 +101,14 @@ contextllm/recordings/
 *.mp3
 *.mp4
 *.avi
+*.mov
+*.mkv
 
 # ─── 웹캠 / 스크린샷 ───
 webcam_frames/
 screenshots/
 contextllm/webcam_frames/
 contextllm/screenshots/
-
-# ─── 테스트 아티팩트 ───
-.pytest_cache/
-.coverage
-htmlcov/
-.tox/
 
 # ─── Node.js (웹 대시보드용) ───
 node_modules/

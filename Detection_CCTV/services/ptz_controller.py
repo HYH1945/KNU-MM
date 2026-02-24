@@ -6,6 +6,7 @@ class PTZCameraManager:
     def __init__(self, config: AppConfig):
         self._connected: bool = False
         self._profile_token: str = ""
+        self._log_errors: bool = bool(getattr(config, "PTZ_LOG_ERRORS", False))
         
         try:
             self.cam = ONVIFCamera(
@@ -23,6 +24,8 @@ class PTZCameraManager:
             print("[PTZ] Camera control connected.")
         except Exception as e:
             print(f"[PTZ] Connection failed: {e}")
+            if self._log_errors:
+                print(f"[PTZ] Exception details: {e}")
 
     def move_async(self, pan: float, tilt: float, zoom: float = 0.0) -> None:
         # MainThread blocking Async PTZ Move Command
@@ -38,8 +41,9 @@ class PTZCameraManager:
                 'Zoom': {'x': zoom}
             }
             self.ptz_service.ContinuousMove(self._move_request)
-        except Exception:
-            pass
+        except Exception as e:
+            if self._log_errors:
+                print(f"[PTZ] Move error: {e}")
 
     def stop(self) -> None:
         if not self._connected: return
@@ -48,5 +52,13 @@ class PTZCameraManager:
     def _stop_routine(self):
         try:
             self.ptz_service.Stop({'ProfileToken': self._profile_token})
-        except Exception:
-            pass
+        except Exception as e:
+            if self._log_errors:
+                print(f"[PTZ] Stop error: {e}")
+
+    # --- Compatibility helpers (YOLOv8 controller naming) ---
+    def start_continuous_move(self, pan_velocity: float, tilt_velocity: float, zoom: float = 0.0) -> None:
+        self.move_async(pan_velocity, tilt_velocity, zoom)
+
+    def stop_move(self) -> None:
+        self.stop()
