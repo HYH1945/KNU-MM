@@ -30,8 +30,13 @@ try:
     from openai import OpenAI
     from dotenv import load_dotenv
     load_dotenv()
+    OPENAI_CLIENT_AVAILABLE = True
 except ImportError:
-    pass
+    OpenAI = None
+    OPENAI_CLIENT_AVAILABLE = False
+
+    def load_dotenv(*_args, **_kwargs):
+        return False
 
 try:
     import cv2
@@ -164,6 +169,12 @@ class MultimodalAnalyzer:
         Args:
             model: 사용할 OpenAI 모델 (None이면 config에서 로드)
         """
+        if not OPENAI_CLIENT_AVAILABLE:
+            raise ImportError(
+                "openai 패키지가 설치되지 않았습니다. "
+                "pip install openai python-dotenv 로 설치 후 다시 실행하세요."
+            )
+
         # 모델 설정 (인자 > config > 기본값)
         self.model = model or get_config('model', default='gpt-4o-mini')
         
