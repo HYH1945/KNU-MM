@@ -11,6 +11,7 @@ Desktop.ini
 
 # ─── Python ───
 __pycache__/
+*.pyc
 *.py[cod]
 *$py.class
 *.pyo
