@@ -223,7 +223,10 @@ python integrated_system/main.py --config custom.yaml  # 커스텀 설정
 
 ## 팀
 심인영 : PTZ 제어 함수 및 실시간 객체탐지 모듈 개발
+
 장준용 : 음성 처리 및 멀티 모달 시스템 구현 
+
 장호진 : YOLO 기반 실시간 영상 관제 성능 최적화 및 히트맵 기능 구현
+
 황영하 : 팀장, mic array & PTZ 제어 및 프로토타입 제작
 
