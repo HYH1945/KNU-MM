@@ -1,4 +1,4 @@
-# KNU-MM — 멀티모달 관제 시스템
+# 멀티모달 관제 시스템
 
 > 시각(YOLO + PTZ) + 청각(MicArray + STT + YAMNet) 정보를 융합하여,  
 > LLM이 실시간으로 상황을 판단하고 카메라를 제어하는 **멀티모달 관제 시스템**
@@ -148,7 +148,7 @@ python integrated_system/main.py --config custom.yaml  # 커스텀 설정
 | **청각→시각 연동** | DOA 방향으로 PTZ 카메라 자동 회전 → 발화자 추정 |
 
 ### LLM 상황 분석
-<img width="1388" height="731" alt="image" src="https://github.com/user-attachments/assets/2ef0e296-c317-4910-815c-a0fecfe27e35" />
+<img width="588" height="331" alt="image" src="https://github.com/user-attachments/assets/2ef0e296-c317-4910-815c-a0fecfe27e35" />
 
 | 항목 | 내용 |
 |------|------|
@@ -171,26 +171,15 @@ python integrated_system/main.py --config custom.yaml  # 커스텀 설정
 
 ## 이벤트 흐름
 
-```
-이벤트 발생 (Producer)                이벤트 처리 (Consumer)
-─────────────────────                ─────────────────────
-YOLO  → yolo.person_detected ──┐
-YOLO  → yolo.objects_detected──┤
-MIC   → mic.doa_detected    ──┤
-MIC   → mic.speech_detected ──┼──→ EventBus ──→ ContextLLM (분석)
-STT   → stt.text_recognized ──┤                    │
-STT   → stt.non_speech_audio──┘               PTZ 카메라 제어
-                                               대시보드 전송
-LLM   → llm.analysis_complete                 서버 리포트
-LLM   → llm.emergency
-```
+<img width="1632" height="421" alt="image" src="https://github.com/user-attachments/assets/48f9926a-df9b-4f60-a07c-4f2b51fbf805" />
+
 
 ---
 
 ## 설정 파일
 
-모든 설정은 `integrated_system/config.yaml`에서 관리합니다.
-민감 정보(API 키, 카메라 비밀번호)는 루트 `.env`에서 로드됩니다.
+모든 설정은 `integrated_system/config.yaml`에서 관리함.
+민감 정보(API 키, 카메라 비밀번호)는 루트 `.env`에서 로드
 
 | 섹션 | 설명 |
 |------|------|
@@ -208,65 +197,33 @@ LLM   → llm.emergency
 
 ---
 
-## 개발 히스토리
-
-1. **개별 모듈 개발** — 팀원별 독립 개발 (YOLO, MicArray, PTZ, ContextLLM)
-2. **통합 아키텍처 설계** — EventBus + Orchestrator 패턴 채택
-3. **모듈 통합** — `integrated_system/`으로 재구성, 원본은 `_archive/`에 보관
-4. **YAMNet 비음성 감지 연동** — STT 실패 오디오 → YAMNet 환경음 분류
-5. **SpatialContext 공간 융합** — DOA↔YOLO 각도 매칭, 발화자 추정
-6. **BoT-SORT 객체 추적** — Re-ID 방식 → BoT-SORT 추적으로 전환
-7. **대시보드 자동화** — 이벤트/ContextLLM 대시보드 자동 시작
-8. **보안 강화** — config.yaml 평문 크레덴셜 → .env 중앙화
-
----
-
-## 알려진 한계 및 향후 과제
-
-| 한계 | 설명 | 향후 방향 |
-|------|------|----------|
-| **LLM 응답 지연** | GPT API 호출 지연으로 실시간성 저하 | 경량 로컬 모델 / 비동기 처리 고도화 |
-| **비음성 방향 추적** | 순수 비음성(유리 파손 등)은 MicArray VAD 미반응 → 방향 추정 불가 | 별도 에너지 기반 DOA 알고리즘 도입 |
-| **마이크 오탐** | 실내 반사음, PTZ 회전 소음 등으로 방향 오인식 | 노이즈 캔슬링 / 고성능 마이크 하드웨어 |
-| **데이터 축적** | 실시간 분석 중심, 체계적 이력 저장 미구현 | DB 기반 관제 데이터 아카이빙 |
-
----
-
 ## 하드웨어
 
 | 장비 | 모델 | 용도 |
 |------|------|------|
 | PTZ 카메라 | Hikvision (ONVIF 지원) | 영상 입력 + 방향 제어 |
 | 마이크 어레이 | ReSpeaker Mic Array v2.0 | 360° 음원 방향 감지 |
-
-<img width="658" height="721" alt="micarray 참고" src="https://github.com/user-attachments/assets/bca58658-6998-41b4-87a7-a6c0502ce6f1" />
-
-*ReSpeaker Mic Array v2.0 각도 기준*
-
 ---
 
 ## 기술 스택
 
 | 분야 | 기술 |
 |------|------|
-| 객체 탐지 | YOLOv8 (ultralytics) + BoT-SORT |
+| 객체 탐지 | YOLOv8 |
 | PTZ 제어 | ONVIF + Hikvision HTTP |
-| 마이크 어레이 | ReSpeaker v2 (pyusb) |
+| Mic array | ReSpeaker v2 (pyusb) |
 | 음성 인식 | Google Speech API (SpeechRecognition) |
 | 비음성 감지 | YAMNet (TensorFlow Hub) |
 | LLM 분석 | OpenAI GPT-4o-mini |
-| 멀티모달 융합 | SpatialContext (시각-청각 공간/시간 매칭) |
 | 영상 처리 | OpenCV |
-| 이벤트 대시보드 | FastAPI + WebSocket + SQLite |
 | LLM 대시보드 | Flask + SocketIO |
 | 프레임워크 | EventBus + Orchestrator + BaseModule |
 
 ---
 
 ## 팀
+심인영 : PTZ 제어 함수 및 실시간 객체탐지 모듈 개발
+장준용 : 음성 처리 및 멀티 모달 시스템 구현 
+장호진 : YOLO 기반 실시간 영상 관제 성능 최적화 및 히트맵 기능 구현
+황영하 : 팀장, mic array & PTZ 제어 및 프로토타입 제작
 
-경북대학교 KNU-MM 팀
-
-## 라이선스
-
-이 프로젝트는 학술 목적으로 개발되었습니다.
